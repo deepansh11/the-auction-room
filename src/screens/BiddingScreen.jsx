@@ -30,6 +30,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [lotOpen, setLotOpen] = React.useState(Boolean(initSession.lotOpen));
   const [actionPending, setActionPending] = React.useState(false);
   const [actionLabel, setActionLabel] = React.useState("");
+  const [actionKind, setActionKind] = React.useState("idle");
   const [showWaitingOverlayDebounced, setShowWaitingOverlayDebounced] = React.useState(false);
   const [roomCode, setRoomCode] = React.useState(initSession.roomCode || "");
   const lastPickEventRef = React.useRef(initSession.lastPickEvent?.id || null);
@@ -62,16 +63,18 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     setTimeout(() => setToast(null), 2400);
   };
 
-  const beginActionLock = (label) => {
+  const beginActionLock = (label, kind = "generic") => {
     if (actionPending) return false;
     setActionPending(true);
     setActionLabel(label || "Syncing action…");
+    setActionKind(kind);
     return true;
   };
 
   const endActionLock = () => {
     setActionPending(false);
     setActionLabel("");
+    setActionKind("idle");
   };
 
   const saveSession = useCallback(async (
@@ -289,7 +292,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleOpenLot = async () => {
     if (!isHost) return;
-    if (!beginActionLock("Opening lot…")) return;
+    if (!beginActionLock("Opening lot…", "open")) return;
     sfx("open");
     try {
       setLotOpen(true);
@@ -309,7 +312,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     const td = getTierData(player.rating, activeTiers);
     if (part.budget < td.price) { showToast("❌ Not enough budget!", "#FF3D71"); return; }
     if (part.squad.length >= SQUAD_MAX) { showToast("❌ Squad full (max 17)!", "#FF3D71"); return; }
-    if (!beginActionLock(`Registering pick: ${player.name}`)) return;
+    if (!beginActionLock(`Registering pick: ${player.name}`, "pick")) return;
 
     sfx("pick");
 
@@ -363,7 +366,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const handlePass = async () => {
     if (!userCanAct) return;
     if (!currentPickerKey) return;
-    if (!beginActionLock("Registering pass…")) return;
+    if (!beginActionLock("Registering pass…", "pass")) return;
     sfx("pass");
     const newPassed = new Set([...passedThisLot, currentPickerKey]);
     setPassedThisLot(newPassed);
@@ -387,7 +390,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleNextLot = async () => {
     if (!isHost) return;
-    if (!beginActionLock("Opening next lot…")) return;
+    if (!beginActionLock("Opening next lot…", "next-lot")) return;
     const rotated = rotateArray(sequence, 1);
     try {
       if (lotIdx + 1 >= lotOrder.length) {
@@ -418,6 +421,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   );
 
   const isAtCap = currentParticipant && currentParticipant.squad.length >= SQUAD_MAX;
+  const showSelfPickLoader = Boolean(userCanAct && actionPending && actionKind === "pick");
   const showWaitingOverlay = Boolean(lotOpen && !lotClosing && currentPickerName && !userCanAct);
 
   React.useEffect(() => {
@@ -447,7 +451,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleEndGame = async () => {
     if (!isHost) return;
-    if (!beginActionLock("Ending game…")) return;
+    if (!beginActionLock("Ending game…", "end-game")) return;
     const rotated = rotateArray(sequence, 1);
     try {
       await saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
@@ -492,20 +496,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         }
       },
         React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, letterSpacing:2, color:"#FFD700", marginBottom:6 } },
-          "CONFIRMING PICK"
-        ),
-        React.createElement("div", { style:{ display:"flex", justifyContent:"center", marginBottom:10 } },
-          React.createElement("div", { style:{
-            width:20,
-            height:20,
-            borderRadius:"50%",
-            border:"2px solid #FFD70044",
-            borderTopColor:"#FFD700",
-            animation:"biddingSpin .8s linear infinite"
-          } })
+          "WAITING FOR PICKER"
         ),
         React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#bbb" } },
-          `${currentPickerName} is picking. Your turn will unlock once this pick is registered.`
+          `${currentPickerName} is currently picking. Your turn will unlock automatically.`
         )
       )
     ),
@@ -576,6 +570,17 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
               actionPending && React.createElement("span", { style:{
                 fontFamily:"'Rajdhani'", fontSize:11, color:"#FFD700", fontWeight:700
               } }, `⏳ ${actionLabel || "Registering action…"}`),
+              showSelfPickLoader && React.createElement("span", { style:{ display:"inline-flex", alignItems:"center", gap:6 } },
+                React.createElement("span", { style:{
+                  width:12,
+                  height:12,
+                  borderRadius:"50%",
+                  border:"2px solid #FFD70044",
+                  borderTopColor:"#FFD700",
+                  animation:"biddingSpin .8s linear infinite"
+                } }),
+                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#FFD700", fontWeight:700 } }, "REGISTERING PICK…")
+              ),
               userCanAct
                 ? React.createElement("button", {
                     onClick:handlePass,
