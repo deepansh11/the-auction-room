@@ -4,6 +4,7 @@ import { requireUserAuth } from "../middleware/userAuth.js";
 import { normalizeFirebaseError } from "../services/firebaseErrors.js";
 import { getFirebase } from "../services/firebaseService.js";
 import { persistCompletedSessionResult } from "../services/sessionPersistence.js";
+import { emitSessionClosed, emitSessionUpdate } from "../services/realtime.js";
 
 const router = Router();
 
@@ -61,6 +62,7 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
     await db.collection("sessions").doc(String(session.id)).set(normalized, { merge: true });
     await db.collection("rooms").doc(roomCode).set({ sessionId: String(session.id), roomCode, updatedAt: Date.now() }, { merge: true });
     await persistCompletedSessionResult(db, normalized);
+    emitSessionUpdate(normalized);
 
     return res.status(201).json({ session: normalized });
   } catch (err) {
@@ -114,6 +116,7 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
 
     const exactIdx = participants.findIndex((p) => p.name === username);
     if (exactIdx >= 0) {
+      emitSessionUpdate(session);
       return res.json({ session });
     }
 
@@ -129,6 +132,7 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         sequence: replaceNameInSequence(session.sequence, previousName, username),
       });
       await sessionRef.set(normalized, { merge: true });
+      emitSessionUpdate(normalized);
       return res.json({ session: normalized });
     }
 
@@ -142,6 +146,7 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         sequence: replaceNameInSequence(session.sequence, previousName, username),
       });
       await sessionRef.set(normalized, { merge: true });
+      emitSessionUpdate(normalized);
       return res.json({ session: normalized });
     }
 
@@ -158,6 +163,7 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         sequence: nextSequence,
       });
       await sessionRef.set(normalized, { merge: true });
+      emitSessionUpdate(normalized);
       return res.json({ session: normalized });
     }
 
@@ -213,16 +219,19 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
     const normalized = withParticipantNames(session);
     if (normalized.status === "complete") {
       await persistCompletedSessionResult(db, normalized);
+      emitSessionClosed(normalized, "complete");
       await cleanupLiveSession(db, normalized);
       return res.status(204).send();
     }
 
     if (normalized.status === "cancelled") {
+      emitSessionClosed(normalized, "cancelled");
       await cleanupLiveSession(db, normalized);
       return res.status(204).send();
     }
 
     await db.collection("sessions").doc(String(req.params.id)).set(normalized, { merge: true });
+    emitSessionUpdate(normalized);
     return res.status(204).send();
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to update session", 500);
@@ -256,6 +265,7 @@ router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
         passedThisLot: [],
         turnIdx: 0,
       });
+      emitSessionClosed(normalized, "cancelled");
       await cleanupLiveSession(db, normalized);
       return res.json({ session: normalized });
     }
@@ -286,6 +296,7 @@ router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
     });
 
     await sessionRef.set(normalized, { merge: true });
+  emitSessionUpdate(normalized);
     return res.json({ session: normalized });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to abandon session", 500);

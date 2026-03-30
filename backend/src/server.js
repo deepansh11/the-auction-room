@@ -2,14 +2,17 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import { createServer } from "node:http";
 import { config } from "./config.js";
 import healthRoutes from "./routes/health.js";
 import authRoutes from "./routes/auth.js";
 import roomRoutes from "./routes/rooms.js";
 import userRoutes from "./routes/users.js";
 import resultRoutes from "./routes/results.js";
+import { initRealtime } from "./services/realtime.js";
 
 const app = express();
+const httpServer = createServer(app);
 
 function rateLimitMessage(req) {
   return { error: `Rate limit exceeded for ${req.method}. Please retry shortly.` };
@@ -76,6 +79,8 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: status === 403 ? "Origin not allowed" : "Internal server error" });
 });
 
-app.listen(config.port, () => {
+initRealtime(httpServer, { corsOrigins: config.corsOrigins });
+
+httpServer.listen(config.port, () => {
   console.log(`Backend running on http://localhost:${config.port}`);
 });

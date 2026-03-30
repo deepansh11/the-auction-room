@@ -7,6 +7,7 @@ import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
 import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, getTierData, getTierKey } from "../game/constants.js";
 import { apiAbandonSession, apiGetSession, apiUpdateSession } from "../lib/api.js";
+import { subscribeToSessionStream } from "../lib/realtime.js";
 import { rotateArray } from "../utils/random.js";
 
 export function BiddingScreen({ session: initSession, user, wishlists, onWishlist, onEnd, onAbandon }) {
@@ -101,9 +102,43 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     let cancelled = false;
     let timerId = null;
     let failCount = 0;
-    const BASE_POLL_MS = 1200;
-    const HIDDEN_POLL_MS = 2200;
-    const BACKOFF_MS = [2000, 3000, 5000];
+    const BASE_POLL_MS = 9000;
+    const HIDDEN_POLL_MS = 15000;
+    const BACKOFF_MS = [3000, 5000, 8000];
+
+    const applyLatest = (latest) => {
+      if (!latest || cancelled) return;
+
+      baseSessionRef.current = latest;
+
+      setParticipants(latest.participants || []);
+      setLotIdx(latest.lotIdx || 0);
+      setTurnIdx(latest.turnIdx || 0);
+      setPassedThisLot(new Set(latest.passedThisLot || []));
+      setLotOpen(Boolean(latest.lotOpen));
+      setLotClosing(Boolean(latest.lotClosing));
+      setSequence(Array.isArray(latest.sequence) ? latest.sequence : []);
+      setLotOrder(Array.isArray(latest.lotOrder) && latest.lotOrder.length > 0 ? latest.lotOrder : [1, 2, 3, 4, 5, 6]);
+      setActivePlayers(latest.shuffledPlayers || latest.playerPool || []);
+      setActiveTiers(latest.tiers || TIERS);
+      setRoomCode(latest.roomCode || "");
+
+      const latestPickEventId = latest.lastPickEvent?.id || null;
+      if (latestPickEventId && latestPickEventId !== lastPickEventRef.current) {
+        lastPickEventRef.current = latestPickEventId;
+        if (latest.lastPickEvent?.picker && latest.lastPickEvent?.playerName) {
+          showToast(`⚽ ${latest.lastPickEvent.picker} picked ${latest.lastPickEvent.playerName}!`, "#00FF88");
+        }
+      }
+
+      if (latest.status === "complete") {
+        onEnd(latest.participants || []);
+      }
+      if (latest.status === "cancelled") {
+        showToast("Game was cancelled by host", "#FF3D71");
+        onAbandon();
+      }
+    };
 
     const schedule = (ms) => {
       if (cancelled) return;
@@ -139,36 +174,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       }
       if (cancelled || !latest) return;
       failCount = 0;
-
-      baseSessionRef.current = latest;
-
-      setParticipants(latest.participants || []);
-      setLotIdx(latest.lotIdx || 0);
-      setTurnIdx(latest.turnIdx || 0);
-      setPassedThisLot(new Set(latest.passedThisLot || []));
-      setLotOpen(Boolean(latest.lotOpen));
-      setLotClosing(Boolean(latest.lotClosing));
-      setSequence(Array.isArray(latest.sequence) ? latest.sequence : []);
-      setLotOrder(Array.isArray(latest.lotOrder) && latest.lotOrder.length > 0 ? latest.lotOrder : [1, 2, 3, 4, 5, 6]);
-      setActivePlayers(latest.shuffledPlayers || latest.playerPool || []);
-      setActiveTiers(latest.tiers || TIERS);
-      setRoomCode(latest.roomCode || "");
-
-      const latestPickEventId = latest.lastPickEvent?.id || null;
-      if (latestPickEventId && latestPickEventId !== lastPickEventRef.current) {
-        lastPickEventRef.current = latestPickEventId;
-        if (latest.lastPickEvent?.picker && latest.lastPickEvent?.playerName) {
-          showToast(`⚽ ${latest.lastPickEvent.picker} picked ${latest.lastPickEvent.playerName}!`, "#00FF88");
-        }
-      }
-
-      if (latest.status === "complete") {
-        onEnd(latest.participants || []);
-      }
-      if (latest.status === "cancelled") {
-        showToast("Game was cancelled by host", "#FF3D71");
-        onAbandon();
-      }
+      applyLatest(latest);
 
       schedule(BASE_POLL_MS);
     };
@@ -193,10 +199,29 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       document.addEventListener("visibilitychange", onVisibility);
     }
 
+    const unsubscribeStream = subscribeToSessionStream(initSession.id, {
+      onUpdate: (next) => {
+        failCount = 0;
+        applyLatest(next);
+      },
+      onClosed: (next, reason) => {
+        if (reason === "complete") {
+          onEnd(next?.participants || baseSessionRef.current?.participants || []);
+          return;
+        }
+        showToast("Game was cancelled by host", "#FF3D71");
+        onAbandon();
+      },
+      onReconnect: () => {
+        syncNowRef.current?.();
+      },
+    });
+
     syncSession(true);
 
     return () => {
       cancelled = true;
+      unsubscribeStream();
       if (timerId) clearTimeout(timerId);
       if (typeof window !== "undefined") {
         window.removeEventListener("focus", onFocus);

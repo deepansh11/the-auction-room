@@ -2,6 +2,7 @@ import React from "react";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
 import { apiGetSession, apiUpdateSession } from "../lib/api.js";
+import { subscribeToSessionStream } from "../lib/realtime.js";
 import { PCOLORS } from "../game/constants.js";
 
 export function DrawScreen({ session, onComplete, onAbandon, user }) {
@@ -18,9 +19,20 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
     let cancelled = false;
     let timerId = null;
     let failCount = 0;
-    const BASE_POLL_MS = 1200;
-    const HIDDEN_POLL_MS = 2200;
-    const BACKOFF_MS = [2000, 3000, 5000];
+    const BASE_POLL_MS = 9000;
+    const HIDDEN_POLL_MS = 15000;
+    const BACKOFF_MS = [3000, 5000, 8000];
+
+    const applyLatest = (latest) => {
+      if (!latest || cancelled) return;
+      setLiveSession(latest);
+      if (latest.status === "active") {
+        onComplete();
+      }
+      if (latest.status === "cancelled") {
+        onAbandon();
+      }
+    };
 
     const schedule = (ms) => {
       if (cancelled) return;
@@ -41,15 +53,14 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
         const latest = await apiGetSession(session.id);
         if (!latest || cancelled) return;
         failCount = 0;
-        setLiveSession(latest);
-        if (latest.status === "active") {
-          onComplete();
-        }
-        if (latest.status === "cancelled") {
-          onAbandon();
-        }
+        applyLatest(latest);
         schedule(BASE_POLL_MS);
-      } catch (_err) {
+      } catch (err) {
+        const msg = String(err?.message || "").toLowerCase();
+        if (msg.includes("404") || msg.includes("not found")) {
+          onAbandon();
+          return;
+        }
         failCount = Math.min(failCount + 1, BACKOFF_MS.length);
         schedule(BACKOFF_MS[failCount - 1] || 5000);
       }
@@ -75,10 +86,28 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       document.addEventListener("visibilitychange", onVisibility);
     }
 
+    const unsubscribeStream = subscribeToSessionStream(session.id, {
+      onUpdate: (next) => {
+        failCount = 0;
+        applyLatest(next);
+      },
+      onClosed: (next, reason) => {
+        if (reason === "cancelled") {
+          onAbandon();
+          return;
+        }
+        applyLatest(next);
+      },
+      onReconnect: () => {
+        syncNowRef.current?.();
+      },
+    });
+
     syncSession(true);
 
     return () => {
       cancelled = true;
+      unsubscribeStream();
       if (timerId) clearTimeout(timerId);
       if (typeof window !== "undefined") {
         window.removeEventListener("focus", onFocus);
