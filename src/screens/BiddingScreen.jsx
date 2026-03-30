@@ -28,6 +28,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [search, setSearch] = React.useState("");
   const [groupFilter, setGroupFilter] = React.useState("ALL");
   const [lotOpen, setLotOpen] = React.useState(Boolean(initSession.lotOpen));
+  const [actionPending, setActionPending] = React.useState(false);
+  const [actionLabel, setActionLabel] = React.useState("");
+  const [showWaitingOverlayDebounced, setShowWaitingOverlayDebounced] = React.useState(false);
   const [roomCode, setRoomCode] = React.useState(initSession.roomCode || "");
   const lastPickEventRef = React.useRef(initSession.lastPickEvent?.id || null);
   const syncNowRef = React.useRef(() => {});
@@ -57,6 +60,18 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const showToast = (msg, color="#FFD700") => {
     setToast({ msg, color });
     setTimeout(() => setToast(null), 2400);
+  };
+
+  const beginActionLock = (label) => {
+    if (actionPending) return false;
+    setActionPending(true);
+    setActionLabel(label || "Syncing action…");
+    return true;
+  };
+
+  const endActionLock = () => {
+    setActionPending(false);
+    setActionLabel("");
   };
 
   const saveSession = useCallback(async (
@@ -93,8 +108,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       await apiUpdateSession(initSession.id, updated, user?.token);
       baseSessionRef.current = updated;
       syncNowRef.current?.();
+      return true;
     } catch (err) {
       showToast("Sync failed. Retrying…", "#FF6B35");
+      return false;
     }
   }, [initSession, lotOpen, lotClosing, user?.token, sequence, lotOrder, activePlayers, activeTiers]);
 
@@ -270,16 +287,21 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const closeLot = () => setLotClosing(true);
 
-  const handleOpenLot = () => {
+  const handleOpenLot = async () => {
     if (!isHost) return;
+    if (!beginActionLock("Opening lot…")) return;
     sfx("open");
-    setLotOpen(true);
-    setLotClosing(false);
-    saveSession(participants, lotIdx, turnIdx, passedThisLot, "active", true, false);
-    showToast(`🔓 Lot ${currentLotNum} is now open!`, "#FFD700");
+    try {
+      setLotOpen(true);
+      setLotClosing(false);
+      await saveSession(participants, lotIdx, turnIdx, passedThisLot, "active", true, false);
+      showToast(`🔓 Lot ${currentLotNum} is now open!`, "#FFD700");
+    } finally {
+      endActionLock();
+    }
   };
 
-  const handlePick = (player) => {
+  const handlePick = async (player) => {
     if (!userCanAct) return;
     if (!currentParticipant || !lotOpen) return;
     const part = currentParticipant;
@@ -287,6 +309,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     const td = getTierData(player.rating, activeTiers);
     if (part.budget < td.price) { showToast("❌ Not enough budget!", "#FF3D71"); return; }
     if (part.squad.length >= SQUAD_MAX) { showToast("❌ Squad full (max 17)!", "#FF3D71"); return; }
+    if (!beginActionLock(`Registering pick: ${player.name}`)) return;
 
     sfx("pick");
 
@@ -310,20 +333,24 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     };
     lastPickEventRef.current = pickEvent.id;
 
-    if (active.length === 0 || newAvail.length === 0) {
-      setTurnIdx(0);
-      setLotOpen(false);
-      setLotClosing(true);
-      saveSession(updatedParticipants, lotIdx, 0, newPassed, "active", false, true, {
+    try {
+      if (active.length === 0 || newAvail.length === 0) {
+        setTurnIdx(0);
+        setLotOpen(false);
+        setLotClosing(true);
+        await saveSession(updatedParticipants, lotIdx, 0, newPassed, "active", false, true, {
+          lastPickEvent: pickEvent,
+        });
+        setTimeout(closeLot, 300);
+        return;
+      }
+      setTurnIdx(newTurnIdx);
+      await saveSession(updatedParticipants, lotIdx, newTurnIdx, newPassed, "active", lotOpen, lotClosing, {
         lastPickEvent: pickEvent,
       });
-      setTimeout(closeLot, 300);
-      return;
+    } finally {
+      endActionLock();
     }
-    setTurnIdx(newTurnIdx);
-    saveSession(updatedParticipants, lotIdx, newTurnIdx, newPassed, "active", lotOpen, lotClosing, {
-      lastPickEvent: pickEvent,
-    });
   };
 
   const handleAbandonClick = async () => {
@@ -333,44 +360,54 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     onAbandon();
   };
 
-  const handlePass = () => {
+  const handlePass = async () => {
     if (!userCanAct) return;
     if (!currentPickerKey) return;
+    if (!beginActionLock("Registering pass…")) return;
     sfx("pass");
     const newPassed = new Set([...passedThisLot, currentPickerKey]);
     setPassedThisLot(newPassed);
     showToast(`${currentPickerName} is done for this lot`, "#888");
     const active = sequence.filter(n => !newPassed.has(n));
-    if (active.length === 0 || availablePlayers.length === 0) {
-      setLotOpen(false);
-      setLotClosing(true);
-      saveSession(participants, lotIdx, turnIdx, newPassed, "active", false, true);
-      closeLot();
-      return;
+    try {
+      if (active.length === 0 || availablePlayers.length === 0) {
+        setLotOpen(false);
+        setLotClosing(true);
+        await saveSession(participants, lotIdx, turnIdx, newPassed, "active", false, true);
+        closeLot();
+        return;
+      }
+      const newTurnIdx = turnIdx % active.length;
+      setTurnIdx(newTurnIdx);
+      await saveSession(participants, lotIdx, newTurnIdx, newPassed);
+    } finally {
+      endActionLock();
     }
-    const newTurnIdx = turnIdx % active.length;
-    setTurnIdx(newTurnIdx);
-    saveSession(participants, lotIdx, newTurnIdx, newPassed);
   };
 
-  const handleNextLot = () => {
+  const handleNextLot = async () => {
     if (!isHost) return;
+    if (!beginActionLock("Opening next lot…")) return;
     const rotated = rotateArray(sequence, 1);
-    if (lotIdx + 1 >= lotOrder.length) {
-      saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
-      onEnd(participants);
-    } else {
-      sfx("open");
-      const newLotIdx = lotIdx + 1;
-      setLotIdx(newLotIdx);
-      setSequence(rotated);
-      setPassedThisLot(new Set());
-      setTurnIdx(0);
-      setLotClosing(false);
-      setLotOpen(false);
-      setSearch("");
-      setGroupFilter("ALL");
-      saveSession(participants, newLotIdx, 0, new Set(), "active", false, false, {}, rotated, lotOrder);
+    try {
+      if (lotIdx + 1 >= lotOrder.length) {
+        await saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
+        onEnd(participants);
+      } else {
+        sfx("open");
+        const newLotIdx = lotIdx + 1;
+        setLotIdx(newLotIdx);
+        setSequence(rotated);
+        setPassedThisLot(new Set());
+        setTurnIdx(0);
+        setLotClosing(false);
+        setLotOpen(false);
+        setSearch("");
+        setGroupFilter("ALL");
+        await saveSession(participants, newLotIdx, 0, new Set(), "active", false, false, {}, rotated, lotOrder);
+      }
+    } finally {
+      endActionLock();
     }
   };
 
@@ -381,6 +418,19 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   );
 
   const isAtCap = currentParticipant && currentParticipant.squad.length >= SQUAD_MAX;
+  const showWaitingOverlay = Boolean(lotOpen && !lotClosing && currentPickerName && !userCanAct);
+
+  React.useEffect(() => {
+    let timerId = null;
+    if (showWaitingOverlay) {
+      timerId = setTimeout(() => setShowWaitingOverlayDebounced(true), 250);
+    } else {
+      setShowWaitingOverlayDebounced(false);
+    }
+    return () => {
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [showWaitingOverlay]);
 
   // Check whether any participant can still buy in any future lot
   const futureLotNums = lotOrder.slice(lotIdx + 1);
@@ -395,11 +445,16 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     });
   });
 
-  const handleEndGame = () => {
+  const handleEndGame = async () => {
     if (!isHost) return;
+    if (!beginActionLock("Ending game…")) return;
     const rotated = rotateArray(sequence, 1);
-    saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
-    onEnd(participants);
+    try {
+      await saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
+      onEnd(participants);
+    } finally {
+      endActionLock();
+    }
   };
 
   return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 272px", height:"100vh", background:"#04060a", overflow:"hidden" } },
@@ -412,6 +467,49 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       selectedName: user.username,
       onClose: () => setAnalyserOpen(false),
     }),
+    showWaitingOverlayDebounced && React.createElement("div", {
+      style:{
+        position:"fixed",
+        inset:0,
+        background:"#00000066",
+        display:"flex",
+        alignItems:"center",
+        justifyContent:"center",
+        zIndex:900,
+        pointerEvents:"none"
+      }
+    },
+      React.createElement("div", {
+        style:{
+          minWidth:320,
+          maxWidth:420,
+          background:"#0a0c12",
+          border:"1px solid #1e2230",
+          borderRadius:12,
+          padding:"16px 20px",
+          boxShadow:"0 20px 40px #00000055",
+          textAlign:"center"
+        }
+      },
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, letterSpacing:2, color:"#FFD700", marginBottom:6 } },
+          "CONFIRMING PICK"
+        ),
+        React.createElement("div", { style:{ display:"flex", justifyContent:"center", marginBottom:10 } },
+          React.createElement("div", { style:{
+            width:20,
+            height:20,
+            borderRadius:"50%",
+            border:"2px solid #FFD70044",
+            borderTopColor:"#FFD700",
+            animation:"biddingSpin .8s linear infinite"
+          } })
+        ),
+        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#bbb" } },
+          `${currentPickerName} is picking. Your turn will unlock once this pick is registered.`
+        )
+      )
+    ),
+    React.createElement("style", null, "@keyframes biddingSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }"),
 
     React.createElement("div", { style:{ display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 } },
       React.createElement("div", { style:{ padding:"10px 16px", borderBottom:"1px solid #0f1218",
@@ -462,22 +560,33 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
           React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
             React.createElement("button", {
               onClick: handleAbandonClick,
+              disabled: actionPending,
               style:{ ...BTN.ghost, fontSize:11, color:isHost ? "#FF6B35" : "#FFD700", borderColor:isHost ? "#FF6B3544" : "#FFD70044" }
             }, isHost ? "CANCEL GAME" : "ABANDON"),
-            !lotClosing && !lotOpen && isHost && React.createElement("button", { onClick:handleOpenLot, style:BTN.gold }, "🔓 OPEN LOT"),
+            !lotClosing && !lotOpen && isHost && React.createElement("button", {
+              onClick:handleOpenLot,
+              disabled: actionPending,
+              style:{ ...BTN.gold, opacity: actionPending ? .65 : 1 }
+            }, actionPending ? "SYNCING…" : "🔓 OPEN LOT"),
             !lotClosing && lotOpen && currentPickerKey && React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
               isAtCap && React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#FF6B35", fontWeight:700 } }, "SQUAD FULL"),
               React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#888" } },
                 "Picking: ", React.createElement("span", { style:{ color:PCOLORS[Math.max(sequence.indexOf(currentPickerKey), 0)], fontWeight:700 } }, currentPickerName || currentPickerKey)
               ),
+              actionPending && React.createElement("span", { style:{
+                fontFamily:"'Rajdhani'", fontSize:11, color:"#FFD700", fontWeight:700
+              } }, `⏳ ${actionLabel || "Registering action…"}`),
               userCanAct
                 ? React.createElement("button", {
                     onClick:handlePass,
+                    disabled: actionPending,
                     style:{ background:"transparent", color:"#FF6B35", border:"1px solid #FF6B3533",
-                      borderRadius:7, padding:"5px 12px", fontSize:11, cursor:"pointer",
+                      borderRadius:7, padding:"5px 12px", fontSize:11, cursor: actionPending ? "not-allowed" : "pointer",
+                      opacity: actionPending ? .65 : 1,
                       fontFamily:"'Bebas Neue'", letterSpacing:1 }
-                  }, "PASS / DONE FOR LOT")
-                : React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555", fontWeight:700 } }, "WAITING FOR PICKER")
+                  }, actionPending ? "REGISTERING…" : "PASS / DONE FOR LOT")
+                : React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555", fontWeight:700 } },
+                    currentPickerName ? `WAITING · ${currentPickerName} IS PICKING` : "WAITING FOR PICKER")
             ),
             !lotClosing && !lotOpen && !isHost && React.createElement("span", { style:{
               fontFamily:"'Rajdhani'", fontSize:13, color:"#555", letterSpacing:1 } },
@@ -524,16 +633,21 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
           lotIdx + 1 >= lotOrder.length
             ? React.createElement("button", { style:BTN.gold, onClick:handleNextLot }, "🏆 FINAL SQUADS")
             : canAnyoneBuyInFuture
-              ? React.createElement("button", { style:BTN.gold, onClick:handleNextLot }, `OPEN LOT ${lotOrder[lotIdx+1]} →`)
+              ? React.createElement("button", {
+                  style:{ ...BTN.gold, opacity: actionPending ? .65 : 1 },
+                  onClick:handleNextLot,
+                  disabled: actionPending
+                }, actionPending ? "SYNCING…" : `OPEN LOT ${lotOrder[lotIdx+1]} →`)
               : React.createElement(React.Fragment, null,
                   React.createElement("div", { style:{ maxWidth:400, textAlign:"center", padding:"14px 20px",
                     background:"#1a0408", border:"1px solid #FF3D7144", borderRadius:10, marginBottom:4,
                     fontFamily:"'Rajdhani'", fontSize:14, color:"#FF6B9D", lineHeight:1.6 }
                   }, "⚠️ No player can afford anyone in the remaining lots — the game cannot continue."),
                   React.createElement("button", {
-                    style:{ ...BTN.gold, background:"#2a0812", borderColor:"#FF3D71", color:"#FF3D71" },
+                    style:{ ...BTN.gold, background:"#2a0812", borderColor:"#FF3D71", color:"#FF3D71", opacity: actionPending ? .65 : 1 },
+                    disabled: actionPending,
                     onClick:handleEndGame
-                  }, "🏁 END GAME")
+                  }, actionPending ? "ENDING…" : "🏁 END GAME")
                 )
         ),
         !isHost && React.createElement("span", { style:{
@@ -563,7 +677,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
               const owner = owned ? participants.find(x => x.squad.some(s => s.id===p.id)) : null;
               const ownerIdx = owner ? participants.findIndex(x => x.name===owner.name) : -1;
               const cantAfford = !owned && currentParticipant && getTierData(p.rating, activeTiers).price > currentParticipant.budget;
-              const canPick = !owned && lotOpen && !lotClosing && userCanAct && !cantAfford && !isAtCap;
+              const canPick = !owned && lotOpen && !lotClosing && userCanAct && !cantAfford && !isAtCap && !actionPending;
               const wl = (wishlists[currentPickerName||""]||[]).includes(p.id);
               return React.createElement(PlayerRow, {
                 key:p.id, player:p,
