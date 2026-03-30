@@ -11,6 +11,10 @@ import resultRoutes from "./routes/results.js";
 
 const app = express();
 
+function rateLimitMessage(req) {
+  return { error: `Rate limit exceeded for ${req.method}. Please retry shortly.` };
+}
+
 app.set("trust proxy", 1);
 
 app.use(
@@ -36,11 +40,26 @@ app.use(
 );
 
 app.use(
+  "/api",
   rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 300,
+    max: 4000,
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => req.method !== "GET",
+    message: rateLimitMessage,
+  })
+);
+
+app.use(
+  "/api",
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 800,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.method === "GET",
+    message: rateLimitMessage,
   })
 );
 

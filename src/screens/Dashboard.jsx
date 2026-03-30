@@ -3,11 +3,13 @@ import { Spinner } from "../components/Spinner.jsx";
 import { BTN } from "../utils/styles.js";
 import { apiListResults, apiListSessions } from "../lib/api.js";
 import { LOTS } from "../game/constants.js";
+import { downloadSquadImage } from "../utils/squadImage.js";
 
 export function Dashboard({ user, onLogout, onNewSession, onLoadSession }) {
   const [sessions, setSessions] = React.useState(null);
   const [results, setResults] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
+  const [expandedResultId, setExpandedResultId] = React.useState("");
 
   React.useEffect(() => {
     (async () => {
@@ -90,14 +92,60 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession }) {
                         padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
                         animation:`rowIn .25s ease ${i*.05}s both`
                       } },
-                        React.createElement("div", null,
-                          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, result.name || `Auction #${i+1}`),
-                          React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
-                            `${result.participants?.length || 0} players · ${result.roomCode || "No room code"} · `,
-                            React.createElement("span", { style:{ color:"#00FF88" } }, "✓ Complete")
+                        React.createElement("div", { style:{ width:"100%" } },
+                          React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center" } },
+                            React.createElement("div", null,
+                              React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, result.name || `Auction #${i+1}`),
+                              React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
+                                `${result.participants?.length || 0} players · ${result.roomCode || "No room code"} · `,
+                                React.createElement("span", { style:{ color:"#00FF88" } }, "✓ Complete")
+                              )
+                            ),
+                            React.createElement("div", { style:{ display:"flex", gap:8 } },
+                              React.createElement("button", {
+                                onClick: () => setExpandedResultId(expandedResultId === result.sessionId ? "" : result.sessionId),
+                                style: BTN.ghost
+                              }, expandedResultId === result.sessionId ? "HIDE SQUADS" : "VIEW SQUADS"),
+                              React.createElement("button", { onClick: () => onLoadSession(result), style:BTN.gold }, "VIEW RESULTS")
+                            )
+                          ),
+                          expandedResultId === result.sessionId && React.createElement("div", {
+                            style:{ marginTop:12, borderTop:"1px solid #1e2230", paddingTop:10, display:"flex", flexDirection:"column", gap:8 }
+                          },
+                            (result.participants || []).length === 0
+                              ? React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#666" } }, "No squad data saved")
+                              : (result.participants || []).map((entry, idx) =>
+                                  React.createElement("div", { key:`sq-${idx}`, style:{
+                                    background:"#0d0f16",
+                                    border:"1px solid #1e2230",
+                                    borderRadius:8,
+                                    padding:"8px 10px",
+                                    display:"flex",
+                                    justifyContent:"space-between",
+                                    alignItems:"center"
+                                  } },
+                                    React.createElement("div", null,
+                                      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:"#fff", letterSpacing:1 } }, entry.name),
+                                      React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } }, `${entry?.squad?.length || 0} players · ${entry?.budget || 0}M left`)
+                                    ),
+                                    React.createElement("button", {
+                                      onClick: () => downloadSquadImage(entry, { formation: "4-3-3", title: result.name || "THE AUCTION ROOM" }),
+                                      style:{
+                                        background:"#0d0f16",
+                                        border:"1px solid #00FF8844",
+                                        borderRadius:6,
+                                        color:"#00FF88",
+                                        padding:"4px 10px",
+                                        cursor:"pointer",
+                                        fontFamily:"'Bebas Neue'",
+                                        fontSize:11,
+                                        letterSpacing:1
+                                      }
+                                    }, "DOWNLOAD")
+                                  )
+                                )
                           )
                         ),
-                        React.createElement("button", { onClick: () => onLoadSession(result), style:BTN.gold }, "VIEW RESULTS")
                       )
                     )
                   )

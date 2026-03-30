@@ -1,7 +1,8 @@
 import { LOTS, getTierKey } from "../game/constants.js";
+import { shuffleArray } from "../utils/random.js";
 
 /**
- * Distribute players into lots, ensuring at least 1 S+ player per lot when possible
+ * Distribute players into lots using balanced per-tier spread.
  */
 export function distributeLotsByTier(players, tiers) {
   if (!players.length || !LOTS) return {};
@@ -15,46 +16,17 @@ export function distributeLotsByTier(players, tiers) {
   const byTier = {};
   Object.keys(tiers).forEach(tierKey => {
     byTier[tierKey] = players.filter(p => getTierKey(p.rating, tiers) === tierKey);
-    byTier[tierKey].sort(() => Math.random() - 0.5); // Shuffle within tier
+    byTier[tierKey] = shuffleArray(byTier[tierKey]);
   });
 
-  const tierKeys = Object.keys(tiers).sort((a, b) => {
-    // S+ first, then descending
-    if (a === "S+") return -1;
-    if (b === "S+") return 1;
-    return 0;
-  });
+  const tierKeys = Object.keys(tiers);
 
-  // First pass: ensure each lot gets at least 1 S+ if available
-  const sPlusCount = byTier["S+"]?.length || 0;
-  if (sPlusCount > 0) {
-    const sPlusPerLot = Math.floor(sPlusCount / LOTS);
-    const sPlusExtra = sPlusCount % LOTS;
-    let sPlusIdx = 0;
-    
-    for (let i = 0; i < LOTS; i++) {
-      const count = sPlusPerLot + (i < sPlusExtra ? 1 : 0);
-      for (let j = 0; j < count && sPlusIdx < byTier["S+"].length; j++) {
-        lots[i + 1].push(byTier["S+"][sPlusIdx++]);
-      }
-    }
-  }
-
-  // Second pass: distribute remaining players
+  // Spread each tier round-robin across lots to keep lot strength balanced.
   for (const tierKey of tierKeys) {
-    if (tierKey === "S+") continue;
-    for (const player of byTier[tierKey]) {
-      // Find lot with fewest players
-      let minLot = 1;
-      let minCount = lots[1].length;
-      for (let i = 2; i <= LOTS; i++) {
-        if (lots[i].length < minCount) {
-          minLot = i;
-          minCount = lots[i].length;
-        }
-      }
-      lots[minLot].push(player);
-    }
+    byTier[tierKey].forEach((player, index) => {
+      const lotNum = (index % LOTS) + 1;
+      lots[lotNum].push(player);
+    });
   }
 
   return lots;

@@ -6,6 +6,7 @@ import { PCOLORS } from "../game/constants.js";
 
 export function DrawScreen({ session, onComplete, onAbandon, user }) {
   const [liveSession, setLiveSession] = React.useState(session);
+  const syncNowRef = React.useRef(() => {});
   const cols = ["#FFD700","#4FC3F7","#FF6B35","#00FF88","#FF3D71","#C084FC"];
   const isHost = !!user && liveSession.host === user.username;
 
@@ -15,11 +16,31 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
 
   React.useEffect(() => {
     let cancelled = false;
+    let timerId = null;
+    let failCount = 0;
+    const BASE_POLL_MS = 1200;
+    const HIDDEN_POLL_MS = 2200;
+    const BACKOFF_MS = [2000, 3000, 5000];
 
-    const syncSession = async () => {
+    const schedule = (ms) => {
+      if (cancelled) return;
+      const jitter = Math.floor(Math.random() * 161) - 80;
+      timerId = setTimeout(() => {
+        syncSession(false);
+      }, Math.max(350, ms + jitter));
+    };
+
+    const syncSession = async (force = false) => {
+      if (cancelled) return;
+      if (!force && typeof document !== "undefined" && document.hidden) {
+        schedule(HIDDEN_POLL_MS);
+        return;
+      }
+
       try {
         const latest = await apiGetSession(session.id);
         if (!latest || cancelled) return;
+        failCount = 0;
         setLiveSession(latest);
         if (latest.status === "active") {
           onComplete();
@@ -27,14 +48,44 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
         if (latest.status === "cancelled") {
           onAbandon();
         }
-      } catch (_err) {}
+        schedule(BASE_POLL_MS);
+      } catch (_err) {
+        failCount = Math.min(failCount + 1, BACKOFF_MS.length);
+        schedule(BACKOFF_MS[failCount - 1] || 5000);
+      }
     };
 
-    syncSession();
-    const timer = setInterval(syncSession, 1200);
+    syncNowRef.current = () => {
+      failCount = 0;
+      if (timerId) clearTimeout(timerId);
+      syncSession(true);
+    };
+
+    const onFocus = () => syncNowRef.current?.();
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        syncNowRef.current?.();
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", onFocus);
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibility);
+    }
+
+    syncSession(true);
+
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timerId) clearTimeout(timerId);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("focus", onFocus);
+      }
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibility);
+      }
     };
   }, [session.id, onComplete, onAbandon]);
 
@@ -42,6 +93,7 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
   const shown = phase === 0
     ? liveSession.lotOrder.slice(0, Number(liveSession.revealedLotCount || 0))
     : liveSession.sequence.slice(0, Number(liveSession.revealedPickCount || 0));
+  const lotRevealComplete = phase === 0 && shown.length >= (liveSession.lotOrder?.length || 0);
 
   const persistDrawState = async (patch) => {
     if (!isHost) return;
@@ -51,12 +103,14 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       status: "draw",
       updatedAt: Date.now(),
     }, user?.token);
+    syncNowRef.current?.();
   };
 
   const next = async () => {
     if (!isHost) return;
     sfx("reveal");
     if (phase === 0) {
+      if (shown.length >= liveSession.lotOrder.length) return;
       const nextCount = Math.min(shown.length + 1, liveSession.lotOrder.length);
       await persistDrawState({ revealedLotCount: nextCount });
       if (nextCount === liveSession.lotOrder.length) {
@@ -79,6 +133,7 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       status: "active",
       updatedAt: Date.now(),
     }, user?.token);
+    syncNowRef.current?.();
     onComplete();
   };
 
@@ -91,6 +146,18 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
         phase===0 ? "LOT ORDER" : "PICK SEQUENCE"),
       React.createElement("p", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555", letterSpacing:2, marginBottom:22 } },
         phase===0 ? "Host reveals each lot position" : "First-pick order per lot"),
+      liveSession.roomCode && React.createElement("div", { style:{
+        display:"inline-block",
+        background:"#0d0f16",
+        border:"1px solid #1e2230",
+        borderRadius:8,
+        padding:"6px 12px",
+        marginBottom:14,
+        fontFamily:"'Bebas Neue'",
+        fontSize:14,
+        letterSpacing:2,
+        color:"#FFD700"
+      } }, `ROOM ${liveSession.roomCode}`),
 
       React.createElement("div", { style:{ display:"flex", justifyContent:"center", gap:8, marginBottom:14, flexWrap:"wrap" } },
         liveSession.participants?.map((p, i) =>
@@ -137,11 +204,13 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
 
       !done
         ? isHost
-          ? React.createElement("button", { style:BTN.gold, onClick:next },
-              phase===0
-                ? shown.length===0 ? "REVEAL LOT 1" : `REVEAL LOT ${shown.length+1}`
-                : shown.length===0 ? "REVEAL PICKS" : `REVEAL #${shown.length+1}`
-            )
+          ? lotRevealComplete
+            ? React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "Preparing pick sequence…")
+            : React.createElement("button", { style:BTN.gold, onClick:next },
+                phase===0
+                  ? shown.length===0 ? "REVEAL LOT 1" : `REVEAL LOT ${shown.length+1}`
+                  : shown.length===0 ? "REVEAL PICKS" : `REVEAL #${shown.length+1}`
+              )
           : React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "⏳ Waiting for host reveal…")
         : isHost
           ? React.createElement("button", { style:BTN.gold, onClick:startBidding }, "START BIDDING 🔥")

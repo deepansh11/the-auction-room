@@ -2,8 +2,10 @@ import React from "react";
 import { BTN } from "../utils/styles.js";
 import { loadPlayersFromCsv } from "../data/players.js";
 import { PCOLORS, POS_GROUPS, getTierKey, getTierData, TIERS, getPosGroup } from "../game/constants.js";
+import { apiListResults } from "../lib/api.js";
+import { Spinner } from "../components/Spinner.jsx";
 
-export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWishlist }) {
+export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWishlist, onLogout, onRejoinLast, lastRoomCode, onLoadSession }) {
   const [searchTerm, setSearchTerm] = React.useState("");
   const [selectedPos, setSelectedPos] = React.useState("ALL");
   const [selectedClub, setSelectedClub] = React.useState("ALL");
@@ -15,6 +17,10 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
   const [joinLoading, setJoinLoading] = React.useState(false);
   const [allPlayers, setAllPlayers] = React.useState([]);
   const [loadingPlayers, setLoadingPlayers] = React.useState(true);
+  const [activeTab, setActiveTab] = React.useState("browse");
+  const [pastResults, setPastResults] = React.useState([]);
+  const [loadingResults, setLoadingResults] = React.useState(false);
+  const [expandedResultId, setExpandedResultId] = React.useState("");
 
   // Load players from CSV on mount
   React.useEffect(() => {
@@ -31,9 +37,19 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
     })();
   }, []);
 
+  // Load past results when results tab is active
+  React.useEffect(() => {
+    if (activeTab !== "results") return;
+    setLoadingResults(true);
+    apiListResults(user.username, user?.token)
+      .then(r => setPastResults(Array.isArray(r) ? r : []))
+      .catch(() => setPastResults([]))
+      .finally(() => setLoadingResults(false));
+  }, [activeTab, user.username, user?.token]);
+
   const playerWishlist = wishlists[user.username] || [];
   const allClubs = Array.from(new Set(allPlayers.map(p => p.club)));
-  const ratingRanges = ["ALL", "90+", "85-89", "82-84", "80-81", "75-79", "70-74", "<70"];
+  const ratingRanges = ["ALL", "89+", "87-88", "84-86", "80-83", "79", "75-78", "<75"];
 
   const filteredPlayers = allPlayers.filter(p => {
     const matchesSearch = !searchTerm || 
@@ -42,13 +58,13 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
     const matchesPos = selectedPos === "ALL" || getPosGroup(p.pos) === selectedPos;
     const matchesClub = selectedClub === "ALL" || p.club === selectedClub;
     const matchesRating = selectedRating === "ALL" || 
-      (selectedRating === "90+" ? p.rating >= 90 :
-       selectedRating === "85-89" ? p.rating >= 85 && p.rating < 90 :
-       selectedRating === "82-84" ? p.rating >= 82 && p.rating < 85 :
-       selectedRating === "80-81" ? p.rating >= 80 && p.rating < 82 :
-       selectedRating === "75-79" ? p.rating >= 75 && p.rating < 80 :
-       selectedRating === "70-74" ? p.rating >= 70 && p.rating < 75 :
-       p.rating < 70);
+      (selectedRating === "89+" ? p.rating >= 89 :
+       selectedRating === "87-88" ? p.rating >= 87 && p.rating <= 88 :
+       selectedRating === "84-86" ? p.rating >= 84 && p.rating <= 86 :
+       selectedRating === "80-83" ? p.rating >= 80 && p.rating <= 83 :
+       selectedRating === "79" ? p.rating === 79 :
+       selectedRating === "75-78" ? p.rating >= 75 && p.rating <= 78 :
+       p.rating < 75);
     return matchesSearch && matchesPos && matchesClub && matchesRating;
   });
 
@@ -90,6 +106,23 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
     }
   };
 
+  const handleRejoinClick = async () => {
+    if (!lastRoomCode) return;
+    setJoinLoading(true);
+    setJoinError("");
+    try {
+      if (onRejoinLast) {
+        await onRejoinLast();
+      } else {
+        await onJoinByCode(lastRoomCode);
+      }
+    } catch (err) {
+      setJoinError(err?.message || "Failed to rejoin last room. Try Join by Code.");
+    } finally {
+      setJoinLoading(false);
+    }
+  };
+
   return React.createElement("div", {
     style:{ minHeight:"100vh", background:"#04060a", color:"#fff" }
   },
@@ -98,13 +131,30 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#FFD700", letterSpacing:2 } }, "THE AUCTION ROOM"),
       React.createElement("div", { style:{ display:"flex", gap:10, alignItems:"center" } },
         React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, `@${user.username}`),
+        React.createElement("button", { onClick:onLogout, style:BTN.ghost }, "SIGN OUT"),
         React.createElement("button", { onClick:onNewGame, style:BTN.gold }, "+ CREATE GAME"),
+        lastRoomCode && React.createElement("button", {
+          onClick: handleRejoinClick,
+          disabled: joinLoading,
+          style:{ ...BTN.ghost, borderColor:"#00FF8844", color:"#00FF88", opacity: joinLoading ? .6 : 1 }
+        }, joinLoading ? "REJOINING…" : `REJOIN ${lastRoomCode}`),
         React.createElement("button", {
           onClick: () => setShowJoinModal(true),
           style:{ ...BTN.ghost, marginLeft:8 }
         }, "JOIN BY CODE")
       )
     ),
+
+    joinError && !showJoinModal && React.createElement("div", {
+      style:{
+        maxWidth:1200,
+        margin:"10px auto 0",
+        padding:"8px 24px",
+        fontFamily:"'Rajdhani'",
+        fontSize:12,
+        color:"#FF6B35"
+      }
+    }, joinError),
 
     showJoinModal && React.createElement("div", {
       style:{ position:"fixed", inset:0, background:"#00000066", display:"flex", alignItems:"center", justifyContent:"center", zIndex:500 }
@@ -137,7 +187,20 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       )
     ),
 
-    React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"24px" } },
+    React.createElement("div", { style:{ borderBottom:"1px solid #0f1218", background:"#060810", display:"flex", padding:"0 24px" } },
+      ["browse","wishlist","results"].map(tab =>
+        React.createElement("button", { key:tab, onClick:() => setActiveTab(tab), style:{
+          background:"transparent", border:"none",
+          borderBottom: activeTab===tab ? "2px solid #FFD700" : "2px solid transparent",
+          color: activeTab===tab ? "#FFD700" : "#555",
+          padding:"10px 20px", cursor:"pointer",
+          fontFamily:"'Bebas Neue'", fontSize:13, letterSpacing:2,
+          marginBottom:-1, transition:"all .2s"
+        }}, tab==="browse" ? "BROWSE PLAYERS" : tab==="wishlist" ? "❤️ MY WISHLIST" : "🏆 PAST RESULTS")
+      )
+    ),
+
+    activeTab === "browse" && React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"24px" } },
       React.createElement("div", { style:{ marginBottom:24 } },
         React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:32, letterSpacing:3, marginBottom:4 } }, "BROWSE PLAYERS"),
         React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, `Wishlist and discover players for your next auction`)
@@ -183,10 +246,10 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
           ratingRanges.map(range =>
             React.createElement("option", { key:range, value:range }, 
               range === "ALL" ? "All Ratings" :
-              range === "90+" ? "Elite (90+)" :
-              range === "85-89" ? "S Tier (85-89)" :
-              range === "82-84" ? "A+ (82-84)" :
-              range === "80-81" ? "A (80-81)" :
+              range === "89+" ? "S+ (89+)" :
+              range === "87-88" ? "S (87-88)" :
+              range === "84-86" ? "A+ (84-86)" :
+              range === "80-83" ? "A (80-83)" :
               `${range}`
             )
           )
@@ -250,6 +313,111 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
           );
         })
       )
+    ),
+
+    activeTab === "wishlist" && React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"24px" } },
+      React.createElement("div", { style:{ marginBottom:24 } },
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:32, letterSpacing:3, marginBottom:4 } }, "MY WISHLIST"),
+        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } },
+          playerWishlist.length > 0
+            ? `${playerWishlist.length} player${playerWishlist.length!==1?"s":""} wishlisted`
+            : "Browse players and click ❤️ to wishlist them"
+        )
+      ),
+      (() => {
+        const wlPlayers = allPlayers.filter(p => playerWishlist.includes(p.id));
+        if (wlPlayers.length === 0) {
+          return React.createElement("div", { style:{ textAlign:"center", padding:"60px 20px", color:"#444",
+            fontFamily:"'Rajdhani'", fontSize:16 } },
+            "No players wishlisted yet. Browse players and click 🤍 to add them."
+          );
+        }
+        return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))", gap:12 } },
+          wlPlayers.map((player, idx) => {
+            const tierData = getTierData(player.rating, TIERS);
+            const tierKey = getTierKey(player.rating, TIERS);
+            return React.createElement("div", { key:player.id, style:{
+              background:"#0a0c12", border:"1px solid #1e2028", borderRadius:10,
+              padding:14, display:"flex", flexDirection:"column", gap:10,
+              animation:`rowIn .25s ease ${(idx%8)*.05}s both`, transition:"all .2s"
+            }},
+              React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"start" } },
+                React.createElement("div", null,
+                  React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:16, letterSpacing:1, marginBottom:4 } }, player.name),
+                  React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555" } }, `${player.pos} · ${player.club}`)
+                ),
+                React.createElement("button", {
+                  onClick: () => handleWishlist(player.id),
+                  style:{ background:"transparent", border:"none", fontSize:20, cursor:"pointer", opacity:1 }
+                }, "❤️")
+              ),
+              React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
+                React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:6, flex:1 } },
+                  React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:tierData.color } }, player.rating),
+                  React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:tierData.color,
+                    background:tierData.bg, border:`1px solid ${tierData.border}`,
+                    borderRadius:3, padding:"2px 6px" } }, tierKey)
+                ),
+                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555" } }, `${player.nation}`)
+              )
+            );
+          })
+        );
+      })()
+    ),
+
+    activeTab === "results" && React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"24px" } },
+      React.createElement("div", { style:{ marginBottom:24 } },
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:32, letterSpacing:3, marginBottom:4 } }, "PAST RESULTS"),
+        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "Your completed auction history")
+      ),
+      loadingResults
+        ? React.createElement("div", { style:{ display:"flex", justifyContent:"center", padding:60 } }, React.createElement(Spinner, null))
+        : pastResults.length === 0
+          ? React.createElement("div", { style:{ textAlign:"center", padding:"60px 20px", color:"#444",
+              fontFamily:"'Rajdhani'", fontSize:16 } }, "No completed auctions yet")
+          : React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
+              pastResults.map((result, i) =>
+                React.createElement("div", { key:i, style:{
+                  background:"#0a0c12", border:"1px solid #1e2230", borderRadius:12,
+                  padding:"16px 20px", animation:`rowIn .25s ease ${i*.05}s both`
+                } },
+                  React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center" } },
+                    React.createElement("div", null,
+                      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, result.name || `Auction #${i+1}`),
+                      React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
+                        `${result.participants?.length || 0} players · ${result.roomCode || ""} · `,
+                        React.createElement("span", { style:{ color:"#00FF88" } }, "✓ Complete")
+                      )
+                    ),
+                    React.createElement("div", { style:{ display:"flex", gap:8 } },
+                      onLoadSession && React.createElement("button", {
+                        onClick: () => onLoadSession(result),
+                        style: BTN.gold
+                      }, "VIEW RESULTS →")
+                    )
+                  ),
+                  expandedResultId === result.sessionId && React.createElement("div", {
+                    style:{ marginTop:12, borderTop:"1px solid #1e2230", paddingTop:10, display:"flex", flexDirection:"column", gap:8 }
+                  },
+                    (result.participants || []).length === 0
+                      ? React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#666" } }, "No squad data saved")
+                      : (result.participants || []).map((entry, idx) =>
+                          React.createElement("div", { key:`sq-${idx}`, style:{
+                            background:"#0d0f16", border:"1px solid #1e2230", borderRadius:8,
+                            padding:"8px 10px", display:"flex", justifyContent:"space-between", alignItems:"center"
+                          } },
+                            React.createElement("div", null,
+                              React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:"#fff", letterSpacing:1 } }, entry.name),
+                              React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } },
+                                `${entry?.squad?.length || 0} players · ${entry?.budget || 0}M left`)
+                            )
+                          )
+                        )
+                  )
+                )
+              )
+            )
     )
   );
 

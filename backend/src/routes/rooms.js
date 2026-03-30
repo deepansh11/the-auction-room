@@ -35,6 +35,18 @@ function withParticipantNames(session) {
   };
 }
 
+async function cleanupLiveSession(db, session) {
+  if (!session?.id) return;
+  const batch = db.batch();
+  const sessionRef = db.collection("sessions").doc(String(session.id));
+  batch.delete(sessionRef);
+  if (session.roomCode) {
+    const roomRef = db.collection("rooms").doc(String(session.roomCode).toUpperCase());
+    batch.delete(roomRef);
+  }
+  await batch.commit();
+}
+
 router.post("/rooms", requireUserAuth, async (req, res) => {
   try {
     const session = req.body?.session;
@@ -67,7 +79,10 @@ router.get("/rooms/:roomCode", async (req, res) => {
 
     const sessionId = roomDoc.data()?.sessionId;
     const sessionDoc = await db.collection("sessions").doc(String(sessionId)).get();
-    if (!sessionDoc.exists) return res.status(404).json({ error: "Session not found" });
+    if (!sessionDoc.exists) {
+      await db.collection("rooms").doc(roomCode).delete();
+      return res.status(404).json({ error: "Session not found" });
+    }
 
     return res.json({ session: sessionDoc.data() });
   } catch (err) {
@@ -88,10 +103,14 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
 
     const sessionRef = db.collection("sessions").doc(String(roomDoc.data()?.sessionId));
     const sessionSnap = await sessionRef.get();
-    if (!sessionSnap.exists) return res.status(404).json({ error: "Session not found" });
+    if (!sessionSnap.exists) {
+      await db.collection("rooms").doc(roomCode).delete();
+      return res.status(404).json({ error: "Session not found" });
+    }
 
     const session = sessionSnap.data();
     const participants = Array.isArray(session.participants) ? [...session.participants] : [];
+    const baseBudget = Number(session?.budgetPerBidder || 0);
 
     const exactIdx = participants.findIndex((p) => p.name === username);
     if (exactIdx >= 0) {
@@ -121,6 +140,22 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         ...session,
         participants,
         sequence: replaceNameInSequence(session.sequence, previousName, username),
+      });
+      await sessionRef.set(normalized, { merge: true });
+      return res.json({ session: normalized });
+    }
+
+    // Host should always be able to rejoin a room they created, even if their participant entry is missing.
+    if (session.host === username) {
+      const nextParticipants = [...participants, { name: username, budget: baseBudget, squad: [] }];
+      const nextSequence = Array.isArray(session.sequence) ? [...session.sequence] : [];
+      if (!nextSequence.includes(username)) {
+        nextSequence.push(username);
+      }
+      const normalized = withParticipantNames({
+        ...session,
+        participants: nextParticipants,
+        sequence: nextSequence,
       });
       await sessionRef.set(normalized, { merge: true });
       return res.json({ session: normalized });
@@ -176,8 +211,18 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
 
     const { db } = getFirebase();
     const normalized = withParticipantNames(session);
+    if (normalized.status === "complete") {
+      await persistCompletedSessionResult(db, normalized);
+      await cleanupLiveSession(db, normalized);
+      return res.status(204).send();
+    }
+
+    if (normalized.status === "cancelled") {
+      await cleanupLiveSession(db, normalized);
+      return res.status(204).send();
+    }
+
     await db.collection("sessions").doc(String(req.params.id)).set(normalized, { merge: true });
-    await persistCompletedSessionResult(db, normalized);
     return res.status(204).send();
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to update session", 500);
@@ -206,8 +251,12 @@ router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
         status: "cancelled",
         cancelledBy: username,
         cancelledAt: Date.now(),
+        participants: [],
+        sequence: [],
+        passedThisLot: [],
+        turnIdx: 0,
       });
-      await sessionRef.set(normalized, { merge: true });
+      await cleanupLiveSession(db, normalized);
       return res.json({ session: normalized });
     }
 

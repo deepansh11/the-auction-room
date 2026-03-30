@@ -13,12 +13,26 @@ async function request(path, { method = "GET", body, token } = {}) {
   requireBaseUrl();
   const headers = { "Content-Type": "application/json" };
   if (token) headers.authorization = `Bearer ${token}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error("Request timeout. Please retry.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (res.status === 204) return null;
 

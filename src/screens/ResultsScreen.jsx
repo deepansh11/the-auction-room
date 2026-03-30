@@ -1,6 +1,7 @@
 import React from "react";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
+import { downloadSquadImage } from "../utils/squadImage.js";
 
 export function ResultsScreen({ participants, wishlists, players=[], tiers=TIERS, selectedName }) {
   const [view, setView] = React.useState("squads");
@@ -46,7 +47,6 @@ export function ResultsScreen({ participants, wishlists, players=[], tiers=TIERS
         [...participants].sort((a,b) => b.squad.length-a.squad.length).map((p, i) => {
           const valid = p.squad.length>=SQUAD_MIN && p.squad.length<=SQUAD_MAX;
           const spent = BUDGET - p.budget;
-          const splus = p.squad.filter(pl => getTierKey(pl.rating, tiers)==="S+").length;
           return React.createElement("div", { key:i, style:{
             background:"#0a0c12", border:`1px solid ${PCOLORS[i]}33`,
             borderRadius:14, padding:16, boxShadow:`0 0 16px ${PCOLORS[i]}08`
@@ -61,13 +61,24 @@ export function ResultsScreen({ participants, wishlists, players=[], tiers=TIERS
                   border:`1px solid ${valid?"#00FF8833":"#FF3D7133"}`,
                   borderRadius:4, padding:"2px 6px"
                 }}, `${p.squad.length}p ${valid?"✓":"⚠"}`),
-                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10,
-                  color: splus>=1&&splus<=2?"#FFD700":"#FF3D71",
-                  background:"#FFD70011", border:"1px solid #FFD70033",
-                  borderRadius:4, padding:"2px 6px", fontWeight:700
-                }}, `S+:${splus}`),
                 React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555" } }, `${spent}M`)
               )
+            ),
+            React.createElement("div", { style:{ marginBottom:10 } },
+              React.createElement("button", {
+                onClick: () => downloadSquadImage(p, { formation: "4-3-3", tiers }),
+                style:{
+                  background:"#0d0f16",
+                  border:"1px solid #00FF8844",
+                  borderRadius:6,
+                  color:"#00FF88",
+                  padding:"4px 10px",
+                  cursor:"pointer",
+                  fontFamily:"'Bebas Neue'",
+                  fontSize:11,
+                  letterSpacing:1
+                }
+              }, "DOWNLOAD SQUAD")
             ),
             React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:3 } },
               p.squad.sort((a,b) => b.rating-a.rating).map(pl => {

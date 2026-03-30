@@ -6,6 +6,7 @@ import { BUDGET, LOTS, PCOLORS, TIERS, getTierKey } from "../game/constants.js";
 import { cloneTierConfig, normalizeTiers } from "../game/tierUtils.js";
 import { generateRoomCode } from "../utils/roomUtils.js";
 import { assignLotsToPlayers } from "../game/lotDistribution.js";
+import { shuffleArray } from "../utils/random.js";
 import { ShareScreen } from "./ShareScreen.jsx";
 
 export function SetupScreen({ user, onStart }) {
@@ -43,7 +44,7 @@ export function SetupScreen({ user, onStart }) {
   React.useEffect(() => {
     if (basePlayers.length > 0 && excludedIds.size === 0) {
       const requiredPlayers = count * PLAYERS_PER_PERSON;
-      const allBasePlayers = basePlayers.filter(p => p.rating >= 80);
+      const allBasePlayers = basePlayers.filter(p => p.rating >= 79);
       const sortedByRating = [...allBasePlayers].sort((a, b) => b.rating - a.rating);
       const topPlayerIds = new Set(sortedByRating.slice(0, requiredPlayers).map(p => p.id));
       const newExcluded = new Set(allBasePlayers.filter(p => !topPlayerIds.has(p.id)).map(p => p.id));
@@ -75,7 +76,7 @@ export function SetupScreen({ user, onStart }) {
     
     // Auto-select top 26*n players by rating
     const requiredPlayers = n * PLAYERS_PER_PERSON;
-    const allBasePlayers = basePlayers.filter(p => p.rating >= 80);
+    const allBasePlayers = basePlayers.filter(p => p.rating >= 79);
     const sortedByRating = [...allBasePlayers].sort((a, b) => b.rating - a.rating);
     const topPlayerIds = new Set(sortedByRating.slice(0, requiredPlayers).map(p => p.id));
     const newExcluded = new Set(allBasePlayers.filter(p => !topPlayerIds.has(p.id)).map(p => p.id));
@@ -104,7 +105,7 @@ export function SetupScreen({ user, onStart }) {
   };
 
   const selectedBasePlayers = basePlayers.filter((p) => !excludedIds.has(p.id));
-  const selectedPlayers = selectedBasePlayers.filter((p) => p.rating >= 80);
+  const selectedPlayers = selectedBasePlayers.filter((p) => p.rating >= 79);
   const normalizedTiers = normalizeTiers(tierConfig);
 
   // Fixed pool size: 26 per person
@@ -161,13 +162,10 @@ export function SetupScreen({ user, onStart }) {
         sfx("reveal");
         setCreatingRoom(true);
         setPoolError("");
-        const lotOrder = [1,2,3,4,5,6].sort(() => Math.random()-.5);
+        const lotOrder = shuffleArray([1, 2, 3, 4, 5, 6]);
         const lotAssignedPlayers = assignLotsToPlayers(selectedPlayers, normalizedTiers);
-        const shuffledPlayers = [...lotAssignedPlayers].sort((a,b) => {
-          if (a.lot !== b.lot) return a.lot - b.lot;
-          return Math.random() - .5;
-        });
-        const sequence = names.slice(0,count).sort(() => Math.random()-.5);
+        const shuffledPlayers = shuffleArray(lotAssignedPlayers).sort((a,b) => a.lot - b.lot);
+        const sequence = shuffleArray(names.slice(0, count));
         const sessionId = `session:${Date.now()}`;
         const newSessionData = {
           name: sessionName,
@@ -285,12 +283,12 @@ export function SetupScreen({ user, onStart }) {
       ),
       React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:"1px solid #1e2230", borderRadius:10, padding:10 } },
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 } },
-          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:2 } }, "PLAYER POOL (80+ RATED)"),
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:2 } }, "PLAYER POOL (79+ RATED)"),
           React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
             React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#888" } }, `${selectedBasePlayers.length} selected`),
             React.createElement("button", {
               onClick: () => {
-                const allEligible = basePlayers.filter(p => p.rating >= 80);
+                const allEligible = basePlayers.filter(p => p.rating >= 79);
                 if (selectedBasePlayers.length === allEligible.length) {
                   // Deselect all
                   setExcludedIds(new Set(allEligible.map(p => p.id)));
@@ -301,7 +299,7 @@ export function SetupScreen({ user, onStart }) {
               },
               style:{ background:"#FFD70022", border:"1px solid #FFD70044", color:"#FFD700", borderRadius:6, padding:"3px 8px", 
                 cursor:"pointer", fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700 }
-            }, selectedBasePlayers.length === basePlayers.filter(p => p.rating >= 80).length ? "DESELECT ALL" : "SELECT ALL")
+            }, selectedBasePlayers.length === basePlayers.filter(p => p.rating >= 79).length ? "DESELECT ALL" : "SELECT ALL")
           )
         ),
         React.createElement("div", { style:{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap" } },
@@ -328,7 +326,7 @@ export function SetupScreen({ user, onStart }) {
             padding:"8px 10px", color:"#fff", fontFamily:"'Exo 2'", fontSize:12, marginBottom:8 }
         }),
         React.createElement("div", { style:{ maxHeight:240, overflowY:"auto", border:"1px solid #1a1c22", borderRadius:7, padding:6, marginBottom:8 } },
-          basePlayers.filter(p => p.rating >= 80 && (!search || p.name.toLowerCase().includes(search.toLowerCase()) || p.pos.toLowerCase().includes(search.toLowerCase())))
+          basePlayers.filter(p => p.rating >= 79 && (!search || p.name.toLowerCase().includes(search.toLowerCase()) || p.pos.toLowerCase().includes(search.toLowerCase())))
             .sort((a, b) => b.rating - a.rating)
             .map((p) => {
               const posGroup = Object.entries({GK:["GK"],DEF:["CB","LB","RB","LWB","RWB"],MID:["CDM","CM","CAM","LM","RM"],ATT:["ST","CF","LW","RW","SS"]}).find(([,positions]) => positions.includes(p.pos))?.[0] || "MID";
@@ -347,14 +345,15 @@ export function SetupScreen({ user, onStart }) {
       ),
       React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:"1px solid #1e2230", borderRadius:10, padding:10 } },
         React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:2, marginBottom:8 } }, "TIER RULES"),
-        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"40px 50px 50px 50px 50px", gap:6, alignItems:"center", marginBottom:8, paddingBottom:8, borderBottom:"1px solid #1a1c22" } },
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"40px 50px 50px 50px 50px 44px", gap:6, alignItems:"center", marginBottom:8, paddingBottom:8, borderBottom:"1px solid #1a1c22" } },
           React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#444", fontWeight:700 } }, "TIER"),
           React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#444", fontWeight:700 } }, "MIN"),
           React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#444", fontWeight:700 } }, "MAX"),
-          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#444", fontWeight:700 } }, "PRICE")
+          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#444", fontWeight:700 } }, "PRICE"),
+          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#444", fontWeight:700, textAlign:"right" } }, "COUNT")
         ),
         Object.entries(tierConfig).map(([key, t]) =>
-          React.createElement("div", { key:key, style:{ display:"grid", gridTemplateColumns:"40px 50px 50px 50px 50px", gap:6, alignItems:"center", marginBottom:6 } },
+          React.createElement("div", { key:key, style:{ display:"grid", gridTemplateColumns:"40px 50px 50px 50px 50px 44px", gap:6, alignItems:"center", marginBottom:6 } },
             React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", color:t.color, fontSize:12 } }, key),
             React.createElement("input", { type:"number", min:0, max:100, value:t.min, onChange:e => updateTier(key, "min", e.target.value),
               style:{ background:"#0d0f16", border:"1px solid #1e2230", borderRadius:6, padding:"4px 6px", color:"#fff", fontSize:11, width:"100%" } }),
@@ -363,7 +362,8 @@ export function SetupScreen({ user, onStart }) {
             React.createElement("input", { type:"number", value:t.price, onChange:e => updateTier(key, "price", e.target.value),
               style:{ background:"#0d0f16", border:"1px solid #1e2230", borderRadius:6, padding:"4px 6px", color:"#fff", fontSize:11, width:"100%" } }),
             React.createElement("input", { type:"color", value:t.color, onChange:e => updateTier(key, "color", e.target.value),
-              style:{ background:"#0d0f16", border:"1px solid #1e2230", borderRadius:6, padding:"2px", cursor:"pointer", width:40, height:30 } })
+              style:{ background:"#0d0f16", border:"1px solid #1e2230", borderRadius:6, padding:"2px", cursor:"pointer", width:40, height:30 } }),
+            React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:12, color:t.color, textAlign:"right" } }, tierStats[key] || 0)
           )
         )
       ),
@@ -393,13 +393,10 @@ export function SetupScreen({ user, onStart }) {
 
           setCreatingRoom(true);
           setPoolError("");
-          const lotOrder = [1,2,3,4,5,6].sort(() => Math.random()-.5);
+          const lotOrder = shuffleArray([1, 2, 3, 4, 5, 6]);
           const lotAssignedPlayers = assignLotsToPlayers(selectedPlayers, normalizedTiers);
-          const shuffledPlayers = [...lotAssignedPlayers].sort((a,b) => {
-            if (a.lot !== b.lot) return a.lot - b.lot;
-            return Math.random() - .5;
-          });
-          const sequence = names.slice(0,count).sort(() => Math.random()-.5);
+          const shuffledPlayers = shuffleArray(lotAssignedPlayers).sort((a,b) => a.lot - b.lot);
+          const sequence = shuffleArray(names.slice(0, count));
           const sessionId = `session:${Date.now()}`;
           const newSessionData = {
             name: sessionName,

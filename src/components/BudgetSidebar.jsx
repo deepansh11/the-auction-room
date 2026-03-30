@@ -1,5 +1,5 @@
 import React from "react";
-import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierKey, getTierData } from "../game/constants.js";
+import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData } from "../game/constants.js";
 
 export function BudgetSidebar({ participants, currentTurn, passedSet, onAnalyse, lotIdx, totalLots, tiers=TIERS }) {
   return React.createElement("div", {
@@ -19,7 +19,6 @@ export function BudgetSidebar({ participants, currentTurn, passedSet, onAnalyse,
       const barCol = pct > 50 ? "#00FF88" : pct > 25 ? "#FFD700" : "#FF3D71";
       const isPicking = currentTurn === p.name;
       const hasPassed = passedSet?.has(p.name);
-      const splusCount = p.squad.filter(pl => getTierKey(pl.rating, tiers) === "S+").length;
 
       return React.createElement("div", { key:i, style:{
         background:"#0d0f16", borderRadius:9, padding:"9px 11px",
@@ -61,11 +60,7 @@ export function BudgetSidebar({ participants, currentTurn, passedSet, onAnalyse,
               fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700,
               color: p.squad.length >= SQUAD_MIN && p.squad.length <= SQUAD_MAX ? "#00FF88"
                 : p.squad.length > SQUAD_MAX ? "#FF3D71" : "#666"
-            }}, `${p.squad.length}p`),
-            React.createElement("span", { style:{
-              fontFamily:"'Rajdhani'", fontSize:9,
-              color: splusCount >= 1 && splusCount <= 2 ? "#FFD700" : "#FF3D71"
-            }}, `S+:${splusCount}`)
+            }}, `${p.squad.length}p`)
           )
         )
       );

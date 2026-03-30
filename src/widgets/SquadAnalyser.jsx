@@ -2,35 +2,36 @@ import React from "react";
 import { PitchView } from "../components/PitchView.jsx";
 import { BTN } from "../utils/styles.js";
 import { PCOLORS, FORMATIONS, BUDGET, SQUAD_MIN, SQUAD_MAX, TIERS, getTierKey, getTierData } from "../game/constants.js";
+import { downloadSquadImage } from "../utils/squadImage.js";
 
 export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS, selectedName, onClose }) {
-  const orderedParticipants = React.useMemo(() => {
-    if (!participants.length) return [];
-    const preferred = selectedName ? participants.find((x) => x.name === selectedName) : null;
-    const rest = participants
-      .filter((x) => !preferred || x.name !== preferred.name)
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return preferred ? [preferred, ...rest] : rest;
+  const selfOnlyParticipants = React.useMemo(() => {
+    if (!Array.isArray(participants) || participants.length === 0) return [];
+    if (selectedName) {
+      const own = participants.find((x) => x.name === selectedName);
+      if (own) return [own];
+    }
+    return [participants[0]];
   }, [participants, selectedName]);
 
-  const [sel, setSel] = React.useState(orderedParticipants[0]?.name || "");
+  const [sel, setSel] = React.useState(selfOnlyParticipants[0]?.name || "");
   const [fmts, setFmts] = React.useState({});
   const [tab, setTab] = React.useState("pitch");
 
   React.useEffect(() => {
-    if (selectedName && participants.some((x) => x.name === selectedName)) {
+    if (selectedName && selfOnlyParticipants.some((x) => x.name === selectedName)) {
       setSel(selectedName);
       return;
     }
-    if (!participants.some((x) => x.name === sel)) {
-      setSel(orderedParticipants[0]?.name || "");
+    if (!selfOnlyParticipants.some((x) => x.name === sel)) {
+      setSel(selfOnlyParticipants[0]?.name || "");
     }
-  }, [participants, orderedParticipants, selectedName, sel]);
+  }, [selfOnlyParticipants, selectedName, sel]);
 
-  const p = participants.find(x => x.name === sel) || orderedParticipants[0];
+  const p = selfOnlyParticipants.find((x) => x.name === sel) || selfOnlyParticipants[0];
   const squad = p?.squad || [];
   const fmt = fmts[p?.name] || "4-3-3";
-  const pIdx = participants.findIndex(x => x.name === sel);
+  const pIdx = participants.findIndex((x) => x.name === sel);
   const spent = BUDGET - (p?.budget || 0);
   const valid = squad.length >= SQUAD_MIN && squad.length <= SQUAD_MAX;
   const wlist = wishlists[sel] || [];
@@ -38,8 +39,11 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
 
   const tierCounts = {};
   squad.forEach(pl => { const k = getTierKey(pl.rating, tiers); tierCounts[k] = (tierCounts[k] || 0) + 1; });
-  const splusCount = (tierCounts["S+"] || 0);
-  const splusOk = splusCount >= 1 && splusCount <= 2;
+
+  const handleDownloadSquadImage = () => {
+    if (!p) return;
+    downloadSquadImage(p, { formation: fmt, tiers });
+  };
 
   return React.createElement("div", {
     onClick: e => e.target === e.currentTarget && onClose(),
@@ -57,25 +61,25 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
           React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:26, color:"#fff", letterSpacing:3 } }, "SQUAD ANALYSER"),
           React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", letterSpacing:1 } }, "Pitch view · Wishlist · Formation analysis")
         ),
-        React.createElement("button", { onClick:onClose, style:{ ...BTN.ghost } }, "CLOSE ✕")
-      ),
-      React.createElement("div", { style:{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:14 } },
-        orderedParticipants.map((par, i) => {
-          const colorIdx = participants.findIndex((x) => x.name === par.name);
-          const color = PCOLORS[colorIdx >= 0 ? colorIdx : i];
-          return (
+        React.createElement("div", { style:{ display:"flex", gap:8 } },
           React.createElement("button", {
-            key:i, onClick: () => setSel(par.name),
-            style:{
-              background: sel === par.name ? color : "#111",
-              color: sel === par.name ? "#000" : color,
-              border:`1px solid ${color}55`, borderRadius:8,
-              padding:"5px 14px", cursor:"pointer",
-              fontFamily:"'Bebas Neue'", fontSize:13, letterSpacing:1
-            }
-          }, `${par.name} `, React.createElement("span", { style:{ fontSize:10, opacity:.7 } }, `${par.squad.length}p`))
-        );
-        })
+            onClick: handleDownloadSquadImage,
+            style:{ ...BTN.ghost, borderColor:"#00FF8844", color:"#00FF88" }
+          }, "DOWNLOAD IMAGE"),
+          React.createElement("button", { onClick:onClose, style:{ ...BTN.ghost } }, "CLOSE ✕")
+        )
+      ),
+      p && React.createElement("div", { style:{ marginBottom:14 } },
+        React.createElement("span", { style:{
+          background: `${PCOLORS[pIdx >= 0 ? pIdx : 0]}22`,
+          color: PCOLORS[pIdx >= 0 ? pIdx : 0],
+          border:`1px solid ${PCOLORS[pIdx >= 0 ? pIdx : 0]}55`,
+          borderRadius:8,
+          padding:"5px 14px",
+          fontFamily:"'Bebas Neue'",
+          fontSize:13,
+          letterSpacing:1
+        } }, `${p.name} ${p.squad.length}p`)
       ),
       React.createElement("div", { style:{ display:"flex", gap:6, marginBottom:14 } },
         ["pitch","wishlist"].map(t =>
@@ -119,13 +123,6 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
               squad.length < SQUAD_MIN ? `Need ${SQUAD_MIN-squad.length} more`
               : squad.length > SQUAD_MAX ? "Over limit ⚠"
               : "✓ Valid squad"
-            )
-          ),
-          React.createElement("div", { style:{ background:"#0d0f16", borderRadius:10, padding:12 } },
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:2, marginBottom:4 } }, "S+ PLAYERS (min 1, max 2)"),
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:28, color: splusOk ? "#00FF88" : "#FF3D71", lineHeight:1 } }, splusCount),
-            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color: splusOk ? "#00FF88" : "#FF3D71" } },
-              splusOk ? "✓ Rule satisfied" : splusCount < 1 ? "⚠ Need at least 1 S+" : "⚠ Max 2 S+ allowed"
             )
           ),
           React.createElement("div", { style:{ background:"#0d0f16", borderRadius:10, padding:12 } },

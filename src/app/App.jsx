@@ -24,6 +24,17 @@ export default function App() {
   const [wishlists, setWishlists] = React.useState({}); // { participantName: [playerId, ...] }
   const [loading, setLoading] = React.useState(true);
   const [pendingRoomCode, setPendingRoomCode] = React.useState(null);
+  const [lastRoomCode, setLastRoomCode] = React.useState(() => localStorage.getItem("lastRoomCode") || "");
+
+  const clearLastRoomCode = React.useCallback(() => {
+    setLastRoomCode("");
+    localStorage.removeItem("lastRoomCode");
+  }, []);
+
+  const isRoomMissingError = React.useCallback((err) => {
+    const message = String(err?.message || "").toLowerCase();
+    return message.includes("room not found") || message.includes("session not found");
+  }, []);
 
   const screenForSession = React.useCallback((sessionStatus) => {
     if (sessionStatus === "complete") return "results";
@@ -74,6 +85,10 @@ export default function App() {
             const sessions = await apiListSessions(hydratedUser.username, hydratedUser.token);
             const resumable = sessions.find((s) => s.status === "draw" || s.status === "active");
             if (resumable) {
+              if (resumable?.roomCode) {
+                setLastRoomCode(resumable.roomCode);
+                localStorage.setItem("lastRoomCode", resumable.roomCode);
+              }
               setSession(resumable);
               setScreen(screenForSession(resumable.status));
             } else {
@@ -106,6 +121,10 @@ export default function App() {
           }
           const joinedSession = await apiJoinRoom(pendingRoomCode, user.username, user?.token);
           const nextSession = joinedSession || targetSession;
+          if (nextSession?.roomCode) {
+            setLastRoomCode(nextSession.roomCode);
+            localStorage.setItem("lastRoomCode", nextSession.roomCode);
+          }
           setSession(nextSession);
           setPendingRoomCode(null);
           setScreen(screenForSession(nextSession.status));
@@ -167,16 +186,24 @@ export default function App() {
   };
 
   const handleJoinByCode = async (roomCode) => {
-    if (!isValidRoomCode(roomCode)) {
+    const normalizedRoomCode = String(roomCode || "").toUpperCase();
+    if (!isValidRoomCode(normalizedRoomCode)) {
       throw new Error("Invalid room code format");
     }
-    const targetSession = await findSessionByRoomCode(roomCode);
+    const targetSession = await findSessionByRoomCode(normalizedRoomCode);
     if (!targetSession) {
+      if (normalizedRoomCode === lastRoomCode) {
+        clearLastRoomCode();
+      }
       throw new Error("Room not found");
     }
     // Add current user as participant if not already
-    const joinedSession = await apiJoinRoom(roomCode, user.username, user?.token);
+    const joinedSession = await apiJoinRoom(normalizedRoomCode, user.username, user?.token);
     const nextSession = joinedSession || targetSession;
+    if (nextSession?.roomCode) {
+      setLastRoomCode(nextSession.roomCode);
+      localStorage.setItem("lastRoomCode", nextSession.roomCode);
+    }
     setSession(nextSession);
     setScreen(screenForSession(nextSession.status));
   };
@@ -185,6 +212,10 @@ export default function App() {
     const { deferNavigation = false, skipCreate = false } = options;
     const created = skipCreate ? null : await apiCreateRoom(s, user?.token);
     const nextSession = created || s;
+    if (nextSession?.roomCode) {
+      setLastRoomCode(nextSession.roomCode);
+      localStorage.setItem("lastRoomCode", nextSession.roomCode);
+    }
     setSession(nextSession);
     if (!deferNavigation) {
       setScreen("draw");
@@ -195,6 +226,10 @@ export default function App() {
   const handleLoadSession = (s) => {
     if (!s || typeof s !== "object" || !Array.isArray(s.participants)) {
       return;
+    }
+    if (s?.roomCode) {
+      setLastRoomCode(s.roomCode);
+      localStorage.setItem("lastRoomCode", s.roomCode);
     }
     setSession(s);
     if (s.status === "complete") {
@@ -225,6 +260,40 @@ export default function App() {
     setScreen("results");
   };
 
+  const handleRejoinLast = async () => {
+    if (!lastRoomCode) return;
+    try {
+      await handleJoinByCode(lastRoomCode);
+    } catch (err) {
+      if (isRoomMissingError(err)) {
+        clearLastRoomCode();
+      }
+      throw err;
+    }
+  };
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!user || screen !== "discover" || !lastRoomCode) return;
+
+    (async () => {
+      try {
+        const room = await findSessionByRoomCode(lastRoomCode);
+        if (!room && !cancelled) {
+          clearLastRoomCode();
+        }
+      } catch (err) {
+        if (!cancelled && isRoomMissingError(err)) {
+          clearLastRoomCode();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, screen, lastRoomCode, findSessionByRoomCode, clearLastRoomCode, isRoomMissingError]);
+
   if (loading) return React.createElement("div", {
     style:{ minHeight:"100vh", background:"#04060a", display:"flex",
       alignItems:"center", justifyContent:"center" }
@@ -246,8 +315,11 @@ export default function App() {
     screen === "discover" && user && React.createElement(PlayerDiscovery, {
       user,
       wishlists,
+      onLogout: handleLogout,
       onNewGame: () => setScreen("setup"),
       onJoinByCode: handleJoinByCode,
+      onRejoinLast: handleRejoinLast,
+      lastRoomCode,
       onLoadSession: handleLoadSession,
       onWishlist: (playerId) => handleWishlist(user.username, playerId)
     }),

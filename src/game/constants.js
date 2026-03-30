@@ -4,11 +4,11 @@ export const SQUAD_MAX = 17;
 export const LOTS = 6;
 
 export const TIERS = {
-  "S+": { min:90, max:99, price:22, color:"#FFD700", bg:"#FFD70018", border:"#FFD70055" },
-  "S":  { min:87, max:89, price:18, color:"#E8C547", bg:"#E8C54718", border:"#E8C54755" },
-  "A+": { min:84, max:86, price:14, color:"#C0C0C0", bg:"#C0C0C018", border:"#C0C0C055" },
-  "A":  { min:82, max:83, price:10, color:"#CD7F32", bg:"#CD7F3218", border:"#CD7F3255" },
-  "B":  { min:80, max:81, price: 6, color:"#4FC3F7", bg:"#4FC3F718", border:"#4FC3F755" },
+  "S+": { min:89, max:99, price:22, color:"#FFD700", bg:"#FFD70018", border:"#FFD70055" },
+  "S":  { min:87, max:88, price:18, color:"#E8C547", bg:"#E8C54718", border:"#E8C54755" },
+  "A+": { min:84, max:86, price:15, color:"#C0C0C0", bg:"#C0C0C018", border:"#C0C0C055" },
+  "A":  { min:80, max:83, price:10, color:"#CD7F32", bg:"#CD7F3218", border:"#CD7F3255" },
+  "B":  { min:79, max:79, price: 8, color:"#4FC3F7", bg:"#4FC3F718", border:"#4FC3F755" },
 };
 
 export const getTier = (r, tiers = TIERS) =>
@@ -32,11 +32,21 @@ export const PCOLORS = ["#FFD700", "#4FC3F7", "#FF6B35", "#00FF88", "#FF3D71", "
 export const FORMATIONS = {
   "4-3-3":   [["GK"],["LB","CB","CB","RB"],["CM","CM","CM"],["LW","ST","RW"]],
   "4-4-2":   [["GK"],["LB","CB","CB","RB"],["LM","CM","CM","RM"],["ST","ST"]],
+  "4-4-2 Flat": [["GK"],["LB","CB","CB","RB"],["LM","CM","CM","RM"],["ST","ST"]],
   "4-2-3-1": [["GK"],["LB","CB","CB","RB"],["CDM","CDM"],["LW","CAM","RW"],["ST"]],
+  "4-2-3-1 Wide": [["GK"],["LB","CB","CB","RB"],["CDM","CDM"],["LW","CAM","RW"],["ST"]],
+  "4-1-2-1-2": [["GK"],["LB","CB","CB","RB"],["CDM"],["CM","CM"],["CAM"],["ST","ST"]],
+  "4-1-2-1-2 Narrow": [["GK"],["LB","CB","CB","RB"],["CDM"],["CM","CM"],["CAM"],["ST","ST"]],
+  "4-2-1-3": [["GK"],["LB","CB","CB","RB"],["CDM","CDM"],["CAM"],["LW","ST","RW"]],
+  "4-2-2-2": [["GK"],["LB","CB","CB","RB"],["CDM","CDM"],["CAM","CAM"],["ST","ST"]],
+  "4-4-1-1": [["GK"],["LB","CB","CB","RB"],["LM","CM","CM","RM"],["CF"],["ST"]],
   "3-5-2":   [["GK"],["CB","CB","CB"],["LM","CDM","CM","CM","RM"],["ST","ST"]],
+  "3-4-2-1": [["GK"],["CB","CB","CB"],["LM","CM","CM","RM"],["CAM","CAM"],["ST"]],
   "3-4-3":   [["GK"],["CB","CB","CB"],["LM","CM","CM","RM"],["LW","ST","RW"]],
   "5-3-2":   [["GK"],["LWB","CB","CB","CB","RWB"],["CM","CM","CM"],["ST","ST"]],
+  "5-2-1-2": [["GK"],["LWB","CB","CB","CB","RWB"],["CM","CM"],["CAM"],["ST","ST"]],
   "4-5-1":   [["GK"],["LB","CB","CB","RB"],["LM","CM","CDM","CM","RM"],["ST"]],
+  "4-5-1(2)": [["GK"],["LB","CB","CB","RB"],["LM","CDM","CAM","CDM","RM"],["ST"]],
 };
 
 export const CAN_FILL = {
