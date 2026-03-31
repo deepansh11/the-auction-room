@@ -1,6 +1,7 @@
 import React, { useCallback } from "react";
 import { Toast } from "../components/Toast.jsx";
 import { PlayerRow } from "../components/PlayerRow.jsx";
+import { loadPlayersFromCsv } from "../data/csvPlayerLoader.js";
 import { BudgetSidebar } from "../components/BudgetSidebar.jsx";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BTN } from "../utils/styles.js";
@@ -22,6 +23,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   );
   const [activePlayers, setActivePlayers] = React.useState(initSession.shuffledPlayers || initSession.playerPool || []);
   const [activeTiers, setActiveTiers] = React.useState(initSession.tiers || TIERS);
+  const [playerFaceMap, setPlayerFaceMap] = React.useState(new Map());
   const [toast, setToast] = React.useState(null);
   const [analyserOpen, setAnalyserOpen] = React.useState(false);
   const [lotClosing, setLotClosing] = React.useState(Boolean(initSession.lotClosing));
@@ -38,9 +40,28 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const lastAutoSkippedRef = React.useRef(null);
   const saveSessionRef = React.useRef(null);
 
+  // Load face URL map from CSV so images show for all users regardless of what's in Firestore
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const csvPlayers = await loadPlayersFromCsv();
+        const map = new Map();
+        csvPlayers.forEach(p => { if (p.playerFaceUrl) map.set(p.id, p.playerFaceUrl); });
+        setPlayerFaceMap(map);
+      } catch (_) {}
+    })();
+  }, []);
+
+  // Enrich a player object with face URL from the CSV cache if session data is missing it
+  const enrichPlayer = React.useCallback((p) => {
+    if (p.playerFaceUrl || playerFaceMap.size === 0) return p;
+    const url = playerFaceMap.get(p.id);
+    return url ? { ...p, playerFaceUrl: url } : p;
+  }, [playerFaceMap]);
+
   const isHost = user.username === initSession.host;
   const currentLotNum = lotOrder[Math.min(lotIdx, lotOrder.length - 1)] || lotOrder[0];
-  const lotPlayers = activePlayers.filter(p => p.lot === currentLotNum);
+  const lotPlayers = activePlayers.filter(p => p.lot === currentLotNum).map(enrichPlayer);
 
   const ownedIds = new Set(participants.flatMap(p => p.squad.map(pl => pl.id)));
   const availablePlayers = lotPlayers.filter(p => !ownedIds.has(p.id));

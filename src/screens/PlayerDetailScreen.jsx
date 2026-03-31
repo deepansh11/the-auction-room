@@ -18,15 +18,25 @@ export function PlayerDetailScreen({ player, onClose, isWishlisted, onToggleWish
   const tierData = getTierData(player.rating, TIERS);
   const tierKey = getTierKey(player.rating, TIERS);
   const positionsText = player?.positionsText || player?.positions?.join(", ") || player?.pos || "N/A";
+  const isGK = String(player?.pos || "").toUpperCase() === "GK";
 
-  const statsData = [
-    { label: "PACE", value: statValue(player?.pace) },
-    { label: "SHOOTING", value: statValue(player?.shooting) },
-    { label: "PASSING", value: statValue(player?.passing) },
-    { label: "DRIBBLING", value: statValue(player?.dribbling) },
-    { label: "DEFENDING", value: statValue(player?.defending) },
-    { label: "PHYSIC", value: statValue(player?.physic) },
-  ];
+  const statsData = isGK
+    ? [
+        { label: "DIVING",      value: statValue(player?.gkDiving) },
+        { label: "HANDLING",    value: statValue(player?.gkHandling) },
+        { label: "KICKING",     value: statValue(player?.gkKicking) },
+        { label: "REFLEXES",    value: statValue(player?.gkReflexes) },
+        { label: "SPEED",       value: statValue(player?.gkSpeed) },
+        { label: "POSITIONING", value: statValue(player?.gkPositioning) },
+      ]
+    : [
+        { label: "PACE",      value: statValue(player?.pace) },
+        { label: "SHOOTING",  value: statValue(player?.shooting) },
+        { label: "PASSING",   value: statValue(player?.passing) },
+        { label: "DRIBBLING", value: statValue(player?.dribbling) },
+        { label: "DEFENDING", value: statValue(player?.defending) },
+        { label: "PHYSIC",    value: statValue(player?.physic) },
+      ];
 
   const infoLeft = [
     { label: "Energy", value: "100%" },
@@ -40,6 +50,7 @@ export function PlayerDetailScreen({ player, onClose, isWishlisted, onToggleWish
       ? React.createElement("img", {
           src: player.playerFaceUrl,
           alt: player.name,
+          referrerPolicy: "no-referrer",
           onError: () => setFaceFailed(true),
           style: {
             width: 160,
@@ -365,7 +376,7 @@ export function PlayerDetailScreen({ player, onClose, isWishlisted, onToggleWish
         },
           [
             { label: "Weak Foot", value: statValue(player?.weakFoot) },
-            { label: "Skill Moves", value: statValue(player?.skillMoves) },
+            ...(!isGK ? [{ label: "Skill Moves", value: statValue(player?.skillMoves) }] : []),
             { label: "Height (cm)", value: player?.heightCm || "N/A" },
             { label: "Weight (kg)", value: player?.weightKg || "N/A" },
             { label: "Positions", value: positionsText },

@@ -80,6 +80,13 @@ export async function loadPlayersFromCsv(csvPath = DEFAULT_CSV_PATH) {
       dribbling: toNullableNumber(row.dribbling),
       defending: toNullableNumber(row.defending),
       physic: toNullableNumber(row.physic),
+      // Goalkeeper-specific stats
+      gkDiving: toNullableNumber(row.goalkeeping_diving),
+      gkHandling: toNullableNumber(row.goalkeeping_handling),
+      gkKicking: toNullableNumber(row.goalkeeping_kicking),
+      gkPositioning: toNullableNumber(row.goalkeeping_positioning),
+      gkReflexes: toNullableNumber(row.goalkeeping_reflexes),
+      gkSpeed: toNullableNumber(row.goalkeeping_speed),
       playerFaceUrl,
       lot: 0,
     });

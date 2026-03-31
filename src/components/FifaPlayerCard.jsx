@@ -11,6 +11,78 @@ function initialsFromName(name) {
   return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
 }
 
+// Returns the 6-stat pairs [[label, value], ...] relevant for the player's position
+function getStatGrid(player) {
+  const pos = String(player?.pos || "").toUpperCase();
+  const isGK = pos === "GK";
+
+  if (isGK) {
+    return [
+      ["DIV", statValue(player?.gkDiving)],
+      ["HAN", statValue(player?.gkHandling)],
+      ["KIC", statValue(player?.gkKicking)],
+      ["REF", statValue(player?.gkReflexes)],
+      ["SPD", statValue(player?.gkSpeed)],
+      ["POS", statValue(player?.gkPositioning)],
+    ];
+  }
+
+  const defenders = ["CB","LB","RB","LWB","RWB"];
+  const defMids   = ["CDM","CM"];
+  const attMids   = ["CAM","LM","RM","LW","RW"];
+  const attackers = ["ST","CF","SS"];
+
+  if (defenders.includes(pos)) {
+    return [
+      ["DEF", statValue(player?.defending)],
+      ["PHY", statValue(player?.physic)],
+      ["PAC", statValue(player?.pace)],
+      ["PAS", statValue(player?.passing)],
+      ["DRI", statValue(player?.dribbling)],
+      ["SHO", statValue(player?.shooting)],
+    ];
+  }
+  if (defMids.includes(pos)) {
+    return [
+      ["PAS", statValue(player?.passing)],
+      ["DEF", statValue(player?.defending)],
+      ["PHY", statValue(player?.physic)],
+      ["PAC", statValue(player?.pace)],
+      ["DRI", statValue(player?.dribbling)],
+      ["SHO", statValue(player?.shooting)],
+    ];
+  }
+  if (attMids.includes(pos)) {
+    return [
+      ["PAS", statValue(player?.passing)],
+      ["DRI", statValue(player?.dribbling)],
+      ["PAC", statValue(player?.pace)],
+      ["SHO", statValue(player?.shooting)],
+      ["DEF", statValue(player?.defending)],
+      ["PHY", statValue(player?.physic)],
+    ];
+  }
+  if (attackers.includes(pos)) {
+    return [
+      ["PAC", statValue(player?.pace)],
+      ["SHO", statValue(player?.shooting)],
+      ["DRI", statValue(player?.dribbling)],
+      ["PAS", statValue(player?.passing)],
+      ["PHY", statValue(player?.physic)],
+      ["DEF", statValue(player?.defending)],
+    ];
+  }
+  // Default
+  return [
+    ["PAC", statValue(player?.pace)],
+    ["SHO", statValue(player?.shooting)],
+    ["PAS", statValue(player?.passing)],
+    ["DRI", statValue(player?.dribbling)],
+    ["DEF", statValue(player?.defending)],
+    ["PHY", statValue(player?.physic)],
+  ];
+}
+
 function faceArea(player, faceFailed, setFaceFailed, compact) {
   const size = compact ? 66 : 84;
   const radius = compact ? 10 : 12;
@@ -19,6 +91,7 @@ function faceArea(player, faceFailed, setFaceFailed, compact) {
     return React.createElement("img", {
       src: player.playerFaceUrl,
       alt: player.name,
+      referrerPolicy: "no-referrer",
       onError: () => setFaceFailed(true),
       style: {
         width: size,
@@ -61,15 +134,8 @@ export function FifaPlayerCard({
   const [faceFailed, setFaceFailed] = React.useState(false);
 
   const positionsText = player?.positionsText || player?.positions?.join(", ") || player?.pos || "N/A";
-
-  const statGrid = [
-    ["PAC", statValue(player?.pace)],
-    ["SHO", statValue(player?.shooting)],
-    ["PAS", statValue(player?.passing)],
-    ["DRI", statValue(player?.dribbling)],
-    ["DEF", statValue(player?.defending)],
-    ["PHY", statValue(player?.physic)],
-  ];
+  const isGK = String(player?.pos || "").toUpperCase() === "GK";
+  const statGrid = getStatGrid(player);
 
   return React.createElement("div", {
     style: {
@@ -164,7 +230,7 @@ export function FifaPlayerCard({
           borderRadius: 5,
           padding: "2px 6px",
         } }, `WF: ${Number.isFinite(player?.weakFoot) ? player.weakFoot : "--"}`),
-        React.createElement("span", { style: {
+        !isGK && React.createElement("span", { style: {
           fontFamily: "'Rajdhani'",
           fontSize: 10,
           color: "#a4afc6",

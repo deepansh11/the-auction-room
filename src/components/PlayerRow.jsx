@@ -13,12 +13,64 @@ function initials(name) {
   return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
 }
 
+function getStatPairs(player) {
+  const pos = String(player?.pos || "").toUpperCase();
+  if (pos === "GK") {
+    return [
+      ["DIV", numOrDash(player?.gkDiving)],
+      ["HAN", numOrDash(player?.gkHandling)],
+      ["KIC", numOrDash(player?.gkKicking)],
+      ["REF", numOrDash(player?.gkReflexes)],
+      ["SPD", numOrDash(player?.gkSpeed)],
+      ["POS", numOrDash(player?.gkPositioning)],
+    ];
+  }
+  const defenders = ["CB","LB","RB","LWB","RWB"];
+  const defMids   = ["CDM","CM"];
+  const attMids   = ["CAM","LM","RM","LW","RW"];
+  const attackers = ["ST","CF","SS"];
+  if (defenders.includes(pos)) {
+    return [
+      ["DEF", numOrDash(player?.defending)], ["PHY", numOrDash(player?.physic)],
+      ["PAC", numOrDash(player?.pace)],       ["PAS", numOrDash(player?.passing)],
+      ["DRI", numOrDash(player?.dribbling)],  ["SHO", numOrDash(player?.shooting)],
+    ];
+  }
+  if (defMids.includes(pos)) {
+    return [
+      ["PAS", numOrDash(player?.passing)],    ["DEF", numOrDash(player?.defending)],
+      ["PHY", numOrDash(player?.physic)],      ["PAC", numOrDash(player?.pace)],
+      ["DRI", numOrDash(player?.dribbling)],  ["SHO", numOrDash(player?.shooting)],
+    ];
+  }
+  if (attMids.includes(pos)) {
+    return [
+      ["PAS", numOrDash(player?.passing)],    ["DRI", numOrDash(player?.dribbling)],
+      ["PAC", numOrDash(player?.pace)],        ["SHO", numOrDash(player?.shooting)],
+      ["DEF", numOrDash(player?.defending)],  ["PHY", numOrDash(player?.physic)],
+    ];
+  }
+  if (attackers.includes(pos)) {
+    return [
+      ["PAC", numOrDash(player?.pace)],        ["SHO", numOrDash(player?.shooting)],
+      ["DRI", numOrDash(player?.dribbling)],  ["PAS", numOrDash(player?.passing)],
+      ["PHY", numOrDash(player?.physic)],      ["DEF", numOrDash(player?.defending)],
+    ];
+  }
+  return [
+    ["PAC", numOrDash(player?.pace)],        ["SHO", numOrDash(player?.shooting)],
+    ["PAS", numOrDash(player?.passing)],     ["DRI", numOrDash(player?.dribbling)],
+    ["DEF", numOrDash(player?.defending)],   ["PHY", numOrDash(player?.physic)],
+  ];
+}
+
 export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAfford, isWishlist, onWishlist, tiers=TIERS, animDelay=0 }) {
   const [faceFailed, setFaceFailed] = React.useState(false);
   const td = getTierData(player.rating, tiers);
   const tk = getTierKey(player.rating, tiers);
   const pg = POS_GROUPS[getPosGroup(player.pos)];
   const positionsText = player.positionsText || player.positions?.join(", ") || player.pos;
+  const statPairs = getStatPairs(player);
 
   return React.createElement("div", {
     style: {
@@ -39,6 +91,7 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
       ? React.createElement("img", {
           src: player.playerFaceUrl,
           alt: player.name,
+          referrerPolicy: "no-referrer",
           onError: () => setFaceFailed(true),
           style: {
             width: 56,
@@ -128,13 +181,10 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
       } },
         React.createElement("span", null, `Foot: ${player.preferredFoot || "N/A"}`),
         React.createElement("span", null, `WF: ${numOrDash(player.weakFoot)}`),
-        React.createElement("span", null, `SM: ${numOrDash(player.skillMoves)}`),
-        React.createElement("span", null, `PAC ${numOrDash(player.pace)}`),
-        React.createElement("span", null, `SHO ${numOrDash(player.shooting)}`),
-        React.createElement("span", null, `PAS ${numOrDash(player.passing)}`),
-        React.createElement("span", null, `DRI ${numOrDash(player.dribbling)}`),
-        React.createElement("span", null, `DEF ${numOrDash(player.defending)}`),
-        React.createElement("span", null, `PHY ${numOrDash(player.physic)}`)
+        player.pos !== "GK" && React.createElement("span", null, `SM: ${numOrDash(player.skillMoves)}`),
+        ...statPairs.map(([label, value]) =>
+          React.createElement("span", { key: label }, `${label} ${value}`)
+        )
       )
     ),
 
