@@ -4,6 +4,8 @@ import { loadPlayersFromCsv } from "../data/players.js";
 import { PCOLORS, POS_GROUPS, getTierKey, getTierData, TIERS, getPosGroup } from "../game/constants.js";
 import { apiListResults } from "../lib/api.js";
 import { Spinner } from "../components/Spinner.jsx";
+import { FifaPlayerCard } from "../components/FifaPlayerCard.jsx";
+import { PlayerDetailScreen } from "./PlayerDetailScreen.jsx";
 
 export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWishlist, onLogout, onRejoinLast, lastRoomCode, onLoadSession }) {
   const [searchTerm, setSearchTerm] = React.useState("");
@@ -21,6 +23,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
   const [pastResults, setPastResults] = React.useState([]);
   const [loadingResults, setLoadingResults] = React.useState(false);
   const [expandedResultId, setExpandedResultId] = React.useState("");
+  const [selectedPlayer, setSelectedPlayer] = React.useState(null);
 
   // Load players from CSV on mount
   React.useEffect(() => {
@@ -122,6 +125,17 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       setJoinLoading(false);
     }
   };
+
+  if (selectedPlayer) {
+    return React.createElement(PlayerDetailScreen, {
+      player: selectedPlayer,
+      onClose: () => setSelectedPlayer(null),
+      isWishlisted: playerWishlist.includes(selectedPlayer.id),
+      onToggleWishlist: () => {
+        handleWishlist(selectedPlayer.id);
+      }
+    });
+  }
 
   return React.createElement("div", {
     style:{ minHeight:"100vh", background:"#04060a", color:"#fff" }
@@ -270,7 +284,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
         )
       ),
 
-      React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))", gap:12 } },
+      React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:16 } },
         loadingPlayers ? React.createElement("div", {
           style:{ gridColumn:"1/-1", textAlign:"center", padding:"60px 20px", color:"#666",
             fontFamily:"'Rajdhani'", fontSize:14 }
@@ -284,32 +298,30 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
           const isWishlisted = playerWishlist.includes(player.id);
           const tierKey = getTierKey(player.rating, TIERS);
           
-          return React.createElement("div", { key:player.id, style:{
-            background:"#0a0c12", border:"1px solid #1e2028", borderRadius:10,
-            padding:14, display:"flex", flexDirection:"column", gap:10,
-            animation:`rowIn .25s ease ${(idx%8)*.05}s both`,
-            transition:"all .2s"
-          }},
-            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"start" } },
-              React.createElement("div", null,
-                React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:16, letterSpacing:1, marginBottom:4 } }, player.name),
-                React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555" } }, `${player.pos} · ${player.club}`)
-              ),
-              React.createElement("button", {
-                onClick: () => handleWishlist(player.id),
-                style:{ background:"transparent", border:"none", fontSize:20, cursor:"pointer",
-                  opacity: isWishlisted ? 1 : .5, transition:"opacity .2s" }
-              }, isWishlisted ? "❤️" : "🤍")
-            ),
-            React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
-              React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:6, flex:1 } },
-                React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:tierData.color } }, player.rating),
-                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:tierData.color,
-                  background:tierData.bg, border:`1px solid ${tierData.border}`,
-                  borderRadius:3, padding:"2px 6px" } }, tierKey)
-              ),
-              React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555" } }, `${player.nation}`)
-            )
+          return React.createElement("div", { 
+            key: player.id,
+            onClick: () => setSelectedPlayer(player),
+            style: {
+              cursor: "pointer",
+              animation: `rowIn .25s ease ${(idx%8)*.05}s both`,
+              transition: "transform .2s, box-shadow .2s",
+            },
+            onMouseOver: (e) => {
+              e.currentTarget.style.transform = "translateY(-4px)";
+              e.currentTarget.style.boxShadow = `0 8px 24px ${tierData.color}33`;
+            },
+            onMouseOut: (e) => {
+              e.currentTarget.style.transform = "translateY(0)";
+              e.currentTarget.style.boxShadow = "none";
+            }
+          },
+            React.createElement(FifaPlayerCard, {
+              player,
+              tierData,
+              tierKey,
+              isWishlisted,
+              onToggleWishlist: () => handleWishlist(player.id)
+            })
           );
         })
       )
@@ -332,34 +344,36 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
             "No players wishlisted yet. Browse players and click 🤍 to add them."
           );
         }
-        return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))", gap:12 } },
+        return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:16 } },
           wlPlayers.map((player, idx) => {
             const tierData = getTierData(player.rating, TIERS);
             const tierKey = getTierKey(player.rating, TIERS);
-            return React.createElement("div", { key:player.id, style:{
-              background:"#0a0c12", border:"1px solid #1e2028", borderRadius:10,
-              padding:14, display:"flex", flexDirection:"column", gap:10,
-              animation:`rowIn .25s ease ${(idx%8)*.05}s both`, transition:"all .2s"
-            }},
-              React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"start" } },
-                React.createElement("div", null,
-                  React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:16, letterSpacing:1, marginBottom:4 } }, player.name),
-                  React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555" } }, `${player.pos} · ${player.club}`)
-                ),
-                React.createElement("button", {
-                  onClick: () => handleWishlist(player.id),
-                  style:{ background:"transparent", border:"none", fontSize:20, cursor:"pointer", opacity:1 }
-                }, "❤️")
-              ),
-              React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
-                React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:6, flex:1 } },
-                  React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:tierData.color } }, player.rating),
-                  React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:tierData.color,
-                    background:tierData.bg, border:`1px solid ${tierData.border}`,
-                    borderRadius:3, padding:"2px 6px" } }, tierKey)
-                ),
-                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555" } }, `${player.nation}`)
-              )
+            const isWishlisted = playerWishlist.includes(player.id);
+            
+            return React.createElement("div", { 
+              key: player.id,
+              onClick: () => setSelectedPlayer(player),
+              style: {
+                cursor: "pointer",
+                animation: `rowIn .25s ease ${(idx%8)*.05}s both`,
+                transition: "transform .2s, box-shadow .2s",
+              },
+              onMouseOver: (e) => {
+                e.currentTarget.style.transform = "translateY(-4px)";
+                e.currentTarget.style.boxShadow = `0 8px 24px ${tierData.color}33`;
+              },
+              onMouseOut: (e) => {
+                e.currentTarget.style.transform = "translateY(0)";
+                e.currentTarget.style.boxShadow = "none";
+              }
+            },
+              React.createElement(FifaPlayerCard, {
+                player,
+                tierData,
+                tierKey,
+                isWishlisted,
+                onToggleWishlist: () => handleWishlist(player.id)
+              })
             );
           })
         );

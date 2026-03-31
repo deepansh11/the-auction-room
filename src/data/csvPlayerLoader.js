@@ -1,17 +1,31 @@
 import Papa from "papaparse";
 import { getPosGroup, LOTS } from "../game/constants.js";
 
-export const DEFAULT_CSV_PATH = "/data/FC26 Data Sept 21 2025.csv";
+export const DEFAULT_CSV_PATH = "/data/FC 26 Players.csv";
+const FALLBACK_CSV_PATH = "/data/FC26 Data Sept 21 2025.csv";
+
+function parsePositions(playerPositions) {
+  const parsed = String(playerPositions || "CM")
+    .split(",")
+    .map((pos) => pos.trim().toUpperCase())
+    .filter(Boolean);
+  return parsed.length > 0 ? parsed : ["CM"];
+}
 
 function parsePrimaryPosition(playerPositions) {
-  return String(playerPositions || "CM")
-    .split(",")[0]
-    .trim()
-    .toUpperCase();
+  return parsePositions(playerPositions)[0];
+}
+
+function toNullableNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 export async function loadPlayersFromCsv(csvPath = DEFAULT_CSV_PATH) {
-  const res = await fetch(csvPath);
+  let res = await fetch(csvPath);
+  if (!res.ok && csvPath === DEFAULT_CSV_PATH) {
+    res = await fetch(FALLBACK_CSV_PATH);
+  }
   if (!res.ok) {
     throw new Error("Failed to load player CSV");
   }
@@ -31,15 +45,44 @@ export async function loadPlayersFromCsv(csvPath = DEFAULT_CSV_PATH) {
     const rating = Number(row.overall);
     const name = String(row.short_name || row.long_name || "").trim();
     const pos = parsePrimaryPosition(row.player_positions);
+    const positions = parsePositions(row.player_positions);
     const nation = String(row.nationality_name || "Unknown").trim() || "Unknown";
     const club = String(row.club_name || "Unknown").trim() || "Unknown";
+    const preferredFoot = String(row.preferred_foot || "Unknown").trim() || "Unknown";
+    const weakFoot = toNullableNumber(row.weak_foot);
+    const skillMoves = toNullableNumber(row.skill_moves);
+    const playerFaceUrl = String(row.player_face_url || "").trim() || "";
 
     if (!id || seen.has(id) || !name || !pos || Number.isNaN(rating) || rating < 80) {
       continue;
     }
 
     seen.add(id);
-    out.push({ id, name, pos, rating, nation, club, lot: 0 });
+    out.push({
+      id,
+      name,
+      longName: String(row.long_name || "").trim() || name,
+      pos,
+      positions,
+      positionsText: positions.join(", "),
+      rating,
+      nation,
+      club,
+      age: toNullableNumber(row.age),
+      heightCm: toNullableNumber(row.height_cm),
+      weightKg: toNullableNumber(row.weight_kg),
+      preferredFoot,
+      weakFoot,
+      skillMoves,
+      pace: toNullableNumber(row.pace),
+      shooting: toNullableNumber(row.shooting),
+      passing: toNullableNumber(row.passing),
+      dribbling: toNullableNumber(row.dribbling),
+      defending: toNullableNumber(row.defending),
+      physic: toNullableNumber(row.physic),
+      playerFaceUrl,
+      lot: 0,
+    });
   }
 
   return out;

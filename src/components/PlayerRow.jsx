@@ -2,57 +2,175 @@ import React from "react";
 import { sfx } from "../utils/sfx.js";
 import { getTierData, getTierKey, TIERS, POS_GROUPS, getPosGroup } from "../game/constants.js";
 
+function numOrDash(value) {
+  return Number.isFinite(value) ? value : "--";
+}
+
+function initials(name) {
+  const parts = String(name || "?").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
+}
+
 export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAfford, isWishlist, onWishlist, tiers=TIERS, animDelay=0 }) {
+  const [faceFailed, setFaceFailed] = React.useState(false);
   const td = getTierData(player.rating, tiers);
   const tk = getTierKey(player.rating, tiers);
   const pg = POS_GROUPS[getPosGroup(player.pos)];
+  const positionsText = player.positionsText || player.positions?.join(", ") || player.pos;
 
   return React.createElement("div", {
     style: {
-      display:"grid", gridTemplateColumns:"36px 38px 1fr 44px 50px 28px 88px",
-      alignItems:"center", gap:8,
-      padding:"7px 10px", borderRadius:7, marginBottom:3,
+      display: "grid",
+      gridTemplateColumns: "58px 1fr auto",
+      alignItems: "center",
+      gap: 10,
+      padding: "8px 10px",
+      borderRadius: 9,
+      marginBottom: 4,
       background: owned ? "#08090d" : "#0d0f16",
-      border:`1px solid ${owned ? "#111318" : cantAfford ? "#111" : td.border}`,
-      opacity: owned ? .4 : cantAfford ? .45 : 1,
-      animation:`rowIn .22s ease ${animDelay}s both`,
+      border: `1px solid ${owned ? "#111318" : cantAfford ? "#111" : td.border}`,
+      opacity: owned ? 0.45 : cantAfford ? 0.5 : 1,
+      animation: `rowIn .22s ease ${animDelay}s both`,
     }
   },
-    React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:19, color:td.color, textAlign:"center", lineHeight:1 } }, player.rating),
-    React.createElement("div", { style:{
-      fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700, color:pg.color,
-      background:`${pg.color}18`, borderRadius:4, textAlign:"center", padding:"2px 0", letterSpacing:1
-    }}, player.pos),
-    React.createElement("div", { style:{ minWidth:0 } },
-      React.createElement("div", { style:{ fontFamily:"'Exo 2'", fontSize:13, fontWeight:600,
-        color: owned ? "#444" : "#ddd", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" } }, player.name),
-      React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:"#444" } }, player.club),
+    player.playerFaceUrl && !faceFailed
+      ? React.createElement("img", {
+          src: player.playerFaceUrl,
+          alt: player.name,
+          onError: () => setFaceFailed(true),
+          style: {
+            width: 56,
+            height: 56,
+            objectFit: "cover",
+            borderRadius: 8,
+            border: `1px solid ${td.border}`,
+            background: "#0b0f1a",
+          }
+        })
+      : React.createElement("div", {
+          style: {
+            width: 56,
+            height: 56,
+            borderRadius: 8,
+            border: `1px solid ${td.border}`,
+            background: "linear-gradient(145deg,#101725,#1d2333)",
+            color: "#d0d5df",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontFamily: "'Bebas Neue'",
+            fontSize: 18,
+            letterSpacing: 1,
+          }
+        }, initials(player.name)),
+
+    React.createElement("div", { style: { minWidth: 0 } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 7, minWidth: 0 } },
+        React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 20, color: td.color, lineHeight: 1 } }, player.rating),
+        React.createElement("span", { style: {
+          fontFamily: "'Rajdhani'",
+          fontSize: 10,
+          color: pg.color,
+          background: `${pg.color}18`,
+          borderRadius: 4,
+          textAlign: "center",
+          padding: "2px 6px",
+          letterSpacing: 1,
+          flexShrink: 0,
+        } }, player.pos),
+        React.createElement("span", { style: {
+          fontFamily: "'Rajdhani'",
+          fontSize: 10,
+          color: td.color,
+          background: td.bg,
+          border: `1px solid ${td.border}`,
+          borderRadius: 4,
+          padding: "2px 5px",
+          flexShrink: 0,
+        } }, tk),
+        React.createElement("span", { style: {
+          fontFamily: "'Rajdhani'",
+          fontSize: 11,
+          fontWeight: 700,
+          color: td.color,
+          marginLeft: "auto",
+          flexShrink: 0,
+        } }, `${td.price}M`)
+      ),
+      React.createElement("div", { style: {
+        fontFamily: "'Exo 2'",
+        fontSize: 13,
+        fontWeight: 600,
+        color: owned ? "#535b69" : "#dde3ee",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        marginTop: 1,
+      } }, player.name),
+      React.createElement("div", { style: {
+        fontFamily: "'Rajdhani'",
+        fontSize: 10,
+        color: "#7c879b",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      } }, `${positionsText} | ${player.club}`),
+      React.createElement("div", { style: {
+        fontFamily: "'Rajdhani'",
+        fontSize: 10,
+        color: "#667189",
+        display: "flex",
+        gap: 8,
+        flexWrap: "wrap",
+        marginTop: 2,
+      } },
+        React.createElement("span", null, `Foot: ${player.preferredFoot || "N/A"}`),
+        React.createElement("span", null, `WF: ${numOrDash(player.weakFoot)}`),
+        React.createElement("span", null, `SM: ${numOrDash(player.skillMoves)}`),
+        React.createElement("span", null, `PAC ${numOrDash(player.pace)}`),
+        React.createElement("span", null, `SHO ${numOrDash(player.shooting)}`),
+        React.createElement("span", null, `PAS ${numOrDash(player.passing)}`),
+        React.createElement("span", null, `DRI ${numOrDash(player.dribbling)}`),
+        React.createElement("span", null, `DEF ${numOrDash(player.defending)}`),
+        React.createElement("span", null, `PHY ${numOrDash(player.physic)}`)
+      )
     ),
-    React.createElement("div", { style:{
-      fontFamily:"'Bebas Neue'", fontSize:10, color:td.color,
-      background:td.bg, border:`1px solid ${td.border}`,
-      borderRadius:4, textAlign:"center", padding:"2px 4px"
-    }}, tk),
-    React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, fontWeight:700, color:td.color, textAlign:"right" } },
-      `${td.price}M`),
-    React.createElement("button", {
-      onClick: () => { sfx("wishlist"); onWishlist(player.id); },
-      style: { background:"none", border:"none", cursor:"pointer", fontSize:14,
-        color: isWishlist ? "#FF3D71" : "#333", padding:0 }
-    }, isWishlist ? "❤️" : "🤍"),
-    React.createElement("div", { style:{ textAlign:"right" } },
+
+    React.createElement("div", { style: { textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 } },
+      React.createElement("button", {
+        onClick: () => { sfx("wishlist"); onWishlist(player.id); },
+        style: {
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          fontSize: 15,
+          color: isWishlist ? "#FF3D71" : "#333",
+          padding: 0,
+          lineHeight: 1,
+        }
+      }, isWishlist ? "❤️" : "🤍"),
       owned
-        ? React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:ownerColor, fontWeight:700 } }, `✓ ${ownerName}`)
+        ? React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: ownerColor, fontWeight: 700 } }, `✓ ${ownerName}`)
         : cantAfford
-          ? React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:"#333" } }, "can't afford")
+          ? React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: "#666" } }, "can't afford")
           : onPick
             ? React.createElement("button", {
                 onClick: () => onPick(player),
-                style: { background:`linear-gradient(135deg,${td.color},${td.color}aa)`, color:"#000",
-                  border:"none", borderRadius:6, padding:"4px 10px", fontSize:11, cursor:"pointer",
-                  fontFamily:"'Bebas Neue'", letterSpacing:1 }
+                style: {
+                  background: `linear-gradient(135deg,${td.color},${td.color}aa)`,
+                  color: "#000",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  fontFamily: "'Bebas Neue'",
+                  letterSpacing: 1,
+                }
               }, "PICK")
-            : React.createElement("span", { style:{ color:"#333", fontSize:12 } }, "—")
+            : React.createElement("span", { style: { color: "#444", fontSize: 12 } }, "—")
     )
   );
 }
