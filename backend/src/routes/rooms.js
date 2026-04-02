@@ -47,7 +47,7 @@ function sanitizePlayerRef(player, { includeName = false } = {}) {
   }
 
   const lot = Number(player?.lot);
-  if (Number.isFinite(lot)) {
+  if (Number.isFinite(lot) && lot >= 1 && lot <= 6) {
     ref.lot = lot;
   }
 

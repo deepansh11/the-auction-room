@@ -6,7 +6,7 @@ import { BudgetSidebar } from "../components/BudgetSidebar.jsx";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
-import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, getTierData, getTierKey } from "../game/constants.js";
+import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, LOTS, getTierData, getTierKey } from "../game/constants.js";
 import { apiAbandonSession, apiGetSession, apiUpdateSession } from "../lib/api.js";
 import { subscribeToSessionStream } from "../lib/realtime.js";
 import { rotateArray } from "../utils/random.js";
@@ -70,19 +70,47 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         ? base.name
         : player.name;
 
+      const resolvedLot = Number.isFinite(Number(player?.lot)) ? Number(player?.lot) : Number(base?.lot);
       return {
         ...base,
         ...player,
         name: resolvedName || base.name,
-        lot: Number.isFinite(Number(player?.lot)) ? Number(player?.lot) : Number(base?.lot),
+        lot: normalizeLotValue(resolvedLot) || 1,
       };
     });
+    // ensure at least a lot exists in all entries
   }, [playerDataMap]);
 
   React.useEffect(() => {
     if (playerDataMap.size === 0) return;
     setActivePlayers((prev) => hydratePlayers(prev));
   }, [playerDataMap, hydratePlayers]);
+
+  const normalizeLotValue = (lot) => {
+    const numeric = Number(lot);
+    if (!Number.isFinite(numeric) || numeric < 1 || numeric > LOTS) {
+      return null;
+    }
+    return Math.floor(numeric);
+  };
+
+  const normalizePlayersLot = (players) => {
+    if (!Array.isArray(players)) return [];
+
+    // if at least one player has a valid lot, keep as-is, otherwise fallback assign evenly by index.
+    const hasValidLot = players.some((p) => normalizeLotValue(p.lot) !== null);
+    if (hasValidLot) {
+      return players.map((p) => ({
+        ...p,
+        lot: normalizeLotValue(p.lot) ?? 1,
+      }));
+    }
+
+    return players.map((player, index) => ({
+      ...player,
+      lot: (index % LOTS) + 1,
+    }));
+  };
 
   // Enrich a player object with face URL from the CSV cache if session data is missing it
   const enrichPlayer = React.useCallback((p) => {
@@ -192,7 +220,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       setLotClosing(Boolean(latest.lotClosing));
       setSequence(Array.isArray(latest.sequence) ? latest.sequence : []);
       setLotOrder(Array.isArray(latest.lotOrder) && latest.lotOrder.length > 0 ? latest.lotOrder : [1, 2, 3, 4, 5, 6]);
-      setActivePlayers(hydratePlayers(latest.shuffledPlayers || latest.playerPool || []));
+      setActivePlayers(normalizePlayersLot(hydratePlayers(latest.shuffledPlayers || latest.playerPool || [])));
       setActiveTiers(latest.tiers || TIERS);
       setRoomCode(latest.roomCode || "");
 
@@ -311,21 +339,42 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   // Auto-skip any picker who cannot afford any available player or whose squad is full
   React.useEffect(() => {
     if (!lotOpen || lotClosing || !currentPickerKey) return;
+
+    // If this lot has no active target players (invalid assignment), and game still live,
+    // we recover instead of repeatedly auto-skipping everyone.
+    if (lotPlayers.length === 0 && activePlayers.length > 0) {
+      showToast("⚠️ Lots look malformed; reassigning players into lots to continue", "#FFAA00");
+      const reassigned = normalizePlayersLot(activePlayers);
+      setActivePlayers(reassigned);
+      if (isHost) {
+        saveSessionRef.current?.(participants, lotIdx, turnIdx, passedThisLot, "active", lotOpen, lotClosing, {
+          playerPool: reassigned,
+          shuffledPlayers: reassigned,
+        }, sequence, lotOrder);
+      }
+      return;
+    }
+
     const skipKey = `${lotIdx}-${currentPickerKey}`;
     if (lastAutoSkippedRef.current === skipKey) return;
+
     const part = currentParticipant;
     if (!part) return;
+
     const squadFull = part.squad.length >= SQUAD_MAX;
     const canAfford = availablePlayers.some(p => {
       const price = Number(getTierData(p.rating, activeTiers)?.price || 0);
       return part.budget >= price;
     });
+
     if (!squadFull && canAfford) return; // eligible — normal turn
+
     lastAutoSkippedRef.current = skipKey;
     showToast(`⏭️ ${part.name} auto-skipped (no affordable players)`, "#888");
     const newPassed = new Set([...passedThisLot, currentPickerKey]);
     setPassedThisLot(newPassed);
     const active = sequence.filter(n => !newPassed.has(n));
+
     if (active.length === 0 || availablePlayers.length === 0) {
       setLotOpen(false);
       setLotClosing(true);
@@ -334,12 +383,13 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       }
       return;
     }
+
     const newTurnIdx = turnIdx % active.length;
     setTurnIdx(newTurnIdx);
     if (isHost) {
       saveSessionRef.current?.(participants, lotIdx, newTurnIdx, newPassed, "active", true, false, {}, sequence, lotOrder);
     }
-  }, [lotOpen, lotClosing, currentPickerKey, lotIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lotOpen, lotClosing, currentPickerKey, lotIdx, lotPlayers, activePlayers, currentParticipant, passedThisLot, participants, turnIdx, sequence, lotOrder, activeTiers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const closeLot = () => setLotClosing(true);
 
