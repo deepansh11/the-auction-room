@@ -30,10 +30,41 @@ function withParticipantNames(session) {
   return {
     ...session,
     participantNames: Array.isArray(session?.participants)
-      ? session.participants.map((p) => p.name)
+      ? session.participants
+          .map((p) => String(p?.name || "").trim())
+          .filter(Boolean)
       : [],
     updatedAt: Date.now(),
   };
+}
+
+function sanitizePlayerRef(player, { includeName = false } = {}) {
+  const ref = {};
+
+  const id = Number(player?.id);
+  if (Number.isFinite(id)) {
+    ref.id = id;
+  }
+
+  const lot = Number(player?.lot);
+  if (Number.isFinite(lot)) {
+    ref.lot = lot;
+  }
+
+  if (includeName) {
+    const safeName = String(player?.name || player?.longName || "").trim() || "Unknown";
+    ref.name = safeName;
+  }
+
+  return ref;
+}
+
+function sanitizePlayerList(players, { includeName = false } = {}) {
+  if (!Array.isArray(players)) return [];
+
+  return players
+    .map((player) => sanitizePlayerRef(player, { includeName }))
+    .filter((player) => Number.isFinite(player.id));
 }
 
 async function cleanupLiveSession(db, session) {
@@ -64,21 +95,12 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
       ...session,
       roomCode,
       // Store only player IDs and lot assignments, strip full player objects
-      playerPool: Array.isArray(session.playerPool) 
-        ? session.playerPool.map(p => ({ 
-            id: p.id, 
-            lot: p.lot,
-            name: p.name 
-          }))
-        : [],
-      shuffledPlayers: Array.isArray(session.shuffledPlayers)
-        ? session.shuffledPlayers.map(p => ({ 
-            id: p.id, 
-            lot: p.lot 
-          }))
-        : [],
+      playerPool: sanitizePlayerList(session.playerPool, { includeName: true }),
+      shuffledPlayers: sanitizePlayerList(session.shuffledPlayers, { includeName: true }),
       participantNames: Array.isArray(session?.participants)
-        ? session.participants.map((p) => p.name)
+        ? session.participants
+            .map((p) => String(p?.name || "").trim())
+            .filter(Boolean)
         : [],
       updatedAt: Date.now(),
     };
@@ -253,21 +275,12 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
     const optimizedSession = {
       ...session,
       // Store only player references (IDs and lot), not full objects
-      playerPool: Array.isArray(session.playerPool) 
-        ? session.playerPool.map(p => ({ 
-            id: p.id, 
-            lot: p.lot,
-            name: p.name 
-          }))
-        : [],
-      shuffledPlayers: Array.isArray(session.shuffledPlayers)
-        ? session.shuffledPlayers.map(p => ({ 
-            id: p.id, 
-            lot: p.lot 
-          }))
-        : [],
+      playerPool: sanitizePlayerList(session.playerPool, { includeName: true }),
+      shuffledPlayers: sanitizePlayerList(session.shuffledPlayers, { includeName: true }),
       participantNames: Array.isArray(session?.participants)
-        ? session.participants.map((p) => p.name)
+        ? session.participants
+            .map((p) => String(p?.name || "").trim())
+            .filter(Boolean)
         : [],
       updatedAt: Date.now(),
     };

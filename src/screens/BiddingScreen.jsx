@@ -24,6 +24,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [activePlayers, setActivePlayers] = React.useState(initSession.shuffledPlayers || initSession.playerPool || []);
   const [activeTiers, setActiveTiers] = React.useState(initSession.tiers || TIERS);
   const [playerFaceMap, setPlayerFaceMap] = React.useState(new Map());
+  const [playerDataMap, setPlayerDataMap] = React.useState(new Map());
   const [toast, setToast] = React.useState(null);
   const [analyserOpen, setAnalyserOpen] = React.useState(false);
   const [lotClosing, setLotClosing] = React.useState(Boolean(initSession.lotClosing));
@@ -45,12 +46,31 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     (async () => {
       try {
         const csvPlayers = await loadPlayersFromCsv();
+        const dataMap = new Map();
         const map = new Map();
-        csvPlayers.forEach(p => { if (p.playerFaceUrl) map.set(p.id, p.playerFaceUrl); });
+        csvPlayers.forEach((p) => {
+          dataMap.set(p.id, p);
+          if (p.playerFaceUrl) map.set(p.id, p.playerFaceUrl);
+        });
+        setPlayerDataMap(dataMap);
         setPlayerFaceMap(map);
       } catch (_) {}
     })();
   }, []);
+
+  const hydratePlayers = React.useCallback((players) => {
+    if (!Array.isArray(players)) return [];
+
+    return players.map((player) => {
+      const base = playerDataMap.get(player?.id);
+      return base ? { ...base, ...player } : player;
+    });
+  }, [playerDataMap]);
+
+  React.useEffect(() => {
+    if (playerDataMap.size === 0) return;
+    setActivePlayers((prev) => hydratePlayers(prev));
+  }, [playerDataMap, hydratePlayers]);
 
   // Enrich a player object with face URL from the CSV cache if session data is missing it
   const enrichPlayer = React.useCallback((p) => {
@@ -160,7 +180,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       setLotClosing(Boolean(latest.lotClosing));
       setSequence(Array.isArray(latest.sequence) ? latest.sequence : []);
       setLotOrder(Array.isArray(latest.lotOrder) && latest.lotOrder.length > 0 ? latest.lotOrder : [1, 2, 3, 4, 5, 6]);
-      setActivePlayers(latest.shuffledPlayers || latest.playerPool || []);
+      setActivePlayers(hydratePlayers(latest.shuffledPlayers || latest.playerPool || []));
       setActiveTiers(latest.tiers || TIERS);
       setRoomCode(latest.roomCode || "");
 
@@ -271,7 +291,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         document.removeEventListener("visibilitychange", onVisibility);
       }
     };
-  }, [initSession.id, onEnd, onAbandon]);
+  }, [initSession.id, onEnd, onAbandon, hydratePlayers]);
 
   // Always keep saveSessionRef pointing at the latest saveSession closure
   React.useEffect(() => { saveSessionRef.current = saveSession; });
