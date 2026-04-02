@@ -164,7 +164,7 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
         overflow: "hidden",
         textOverflow: "ellipsis",
         marginTop: 1,
-      } }, player.name),
+      } }, player.name || player.longName || "Unknown" ),
       React.createElement("div", { style: {
         fontFamily: "'Rajdhani'",
         fontSize: 10,

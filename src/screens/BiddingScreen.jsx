@@ -63,7 +63,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
     return players.map((player) => {
       const base = playerDataMap.get(player?.id);
-      return base ? { ...base, ...player } : player;
+      return base ? { ...player, ...base } : player;
     });
   }, [playerDataMap]);
 
