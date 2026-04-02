@@ -63,7 +63,19 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
     return players.map((player) => {
       const base = playerDataMap.get(player?.id);
-      return base ? { ...player, ...base } : player;
+      if (!base) return player;
+
+      // Keep server authoritative values where available and fill missing details from CSV.
+      const resolvedName = String(player?.name || "").trim().toLowerCase() === "unknown"
+        ? base.name
+        : player.name;
+
+      return {
+        ...base,
+        ...player,
+        name: resolvedName || base.name,
+        lot: Number.isFinite(Number(player?.lot)) ? Number(player?.lot) : Number(base?.lot),
+      };
     });
   }, [playerDataMap]);
 

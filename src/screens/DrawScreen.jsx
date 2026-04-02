@@ -4,6 +4,7 @@ import { sfx } from "../utils/sfx.js";
 import { apiGetSession, apiUpdateSession } from "../lib/api.js";
 import { subscribeToSessionStream } from "../lib/realtime.js";
 import { PCOLORS } from "../game/constants.js";
+import { shuffleArray } from "../utils/random.js";
 
 export function DrawScreen({ session, onComplete, onAbandon, user }) {
   const [liveSession, setLiveSession] = React.useState(session);
@@ -144,7 +145,8 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       await persistDrawState({ revealedLotCount: nextCount });
       if (nextCount === liveSession.lotOrder.length) {
         setTimeout(() => {
-          persistDrawState({ drawPhase: 1, revealedPickCount: 0 });
+          const randomSequence = shuffleArray((liveSession.sequence || []));
+          persistDrawState({ drawPhase: 1, revealedPickCount: 0, sequence: randomSequence });
         }, 600);
       }
     } else {
