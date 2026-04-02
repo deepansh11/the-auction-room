@@ -28,7 +28,6 @@ const getRemaining = () => {
 
 export function CountdownTimer() {
   const [remaining, setRemaining] = React.useState(getRemaining());
-  const [celebrating, setCelebrating] = React.useState(false);
 
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -37,25 +36,6 @@ export function CountdownTimer() {
 
     return () => clearInterval(interval);
   }, []);
-
-  React.useEffect(() => {
-    if (remaining === null && !celebrating) {
-      setCelebrating(true);
-      const celebrationTimer = setTimeout(() => setCelebrating(false), 5000);
-      return () => clearTimeout(celebrationTimer);
-    }
-  }, [remaining, celebrating]);
-
-  if (celebrating) {
-    return (
-      <div style={styles.celebrationOverlay}>
-        <div style={styles.celebrationBox}>
-          <div style={{ fontSize: 22, marginBottom: 6 }}>🎉 Auction starts now! 🎉</div>
-          <div style={{ fontSize: 14 }}>Get ready for bidding!</div>
-        </div>
-      </div>
-    );
-  }
 
   if (!remaining) {
     return (
@@ -90,27 +70,5 @@ const styles = {
     fontWeight: 700,
     boxShadow: "0 8px 20px rgba(0, 0, 0, 0.35)",
     pointerEvents: "none",
-  },
-  celebrationOverlay: {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 10000,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "rgba(0, 0, 0, 0.45)",
-    pointerEvents: "none",
-  },
-  celebrationBox: {
-    background: "rgba(255, 255, 255, 0.95)",
-    borderRadius: 14,
-    padding: "18px 24px",
-    boxShadow: "0 10px 26px rgba(0,0,0,0.35)",
-    color: "#111",
-    textAlign: "center",
-    maxWidth: 320,
   },
 };
