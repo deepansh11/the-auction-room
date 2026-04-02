@@ -13,6 +13,14 @@ function initials(name) {
   return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
 }
 
+function displayName(player) {
+  const primary = String(player?.name || "").trim();
+  if (primary && primary.toLowerCase() !== "unknown") return primary;
+  const secondary = String(player?.longName || "").trim();
+  if (secondary && secondary.toLowerCase() !== "unknown") return secondary;
+  return "Unknown";
+}
+
 function getStatPairs(player) {
   const pos = String(player?.pos || "").toUpperCase();
   if (pos === "GK") {
@@ -164,7 +172,7 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
         overflow: "hidden",
         textOverflow: "ellipsis",
         marginTop: 1,
-      } }, player.name || player.longName || "Unknown" ),
+      } }, displayName(player)),
       React.createElement("div", { style: {
         fontFamily: "'Rajdhani'",
         fontSize: 10,

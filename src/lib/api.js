@@ -65,22 +65,27 @@ export async function apiUpdateWishlists(wishlists, token) {
 }
 
 export async function apiCreateRoom(session, token) {
+  const toPlayerRef = (player) => {
+    const ref = {
+      id: player?.id,
+      lot: player?.lot,
+    };
+    const safeName = String(player?.name || player?.longName || "").trim();
+    if (safeName && safeName.toLowerCase() !== "unknown") {
+      ref.name = safeName;
+    }
+    return ref;
+  };
+
   // Optimize session data to reduce payload size and avoid Express 256KB limit
   // Strip full player objects, keep only essential references
   const optimizedSession = {
     ...session,
     playerPool: Array.isArray(session.playerPool)
-      ? session.playerPool.map(p => ({
-          id: p.id,
-          lot: p.lot,
-          name: p.name
-        }))
+      ? session.playerPool.map(toPlayerRef)
       : [],
     shuffledPlayers: Array.isArray(session.shuffledPlayers)
-      ? session.shuffledPlayers.map(p => ({
-          id: p.id,
-          lot: p.lot
-        }))
+      ? session.shuffledPlayers.map(toPlayerRef)
       : [],
   };
   const data = await request("/api/rooms", { method: "POST", body: { session: optimizedSession }, token });
@@ -117,9 +122,27 @@ export async function apiGetSession(sessionId) {
 }
 
 export async function apiUpdateSession(sessionId, session, token) {
+  const toPlayerRef = (player) => {
+    const ref = {
+      id: player?.id,
+      lot: player?.lot,
+    };
+    const safeName = String(player?.name || player?.longName || "").trim();
+    if (safeName && safeName.toLowerCase() !== "unknown") {
+      ref.name = safeName;
+    }
+    return ref;
+  };
+
+  const optimizedSession = {
+    ...session,
+    playerPool: Array.isArray(session?.playerPool) ? session.playerPool.map(toPlayerRef) : [],
+    shuffledPlayers: Array.isArray(session?.shuffledPlayers) ? session.shuffledPlayers.map(toPlayerRef) : [],
+  };
+
   await request(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PUT",
-    body: { session },
+    body: { session: optimizedSession },
     token,
   });
 }

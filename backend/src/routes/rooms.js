@@ -52,8 +52,10 @@ function sanitizePlayerRef(player, { includeName = false } = {}) {
   }
 
   if (includeName) {
-    const safeName = String(player?.name || player?.longName || "").trim() || "Unknown";
-    ref.name = safeName;
+    const safeName = String(player?.name || player?.longName || "").trim();
+    if (safeName && safeName.toLowerCase() !== "unknown") {
+      ref.name = safeName;
+    }
   }
 
   return ref;
