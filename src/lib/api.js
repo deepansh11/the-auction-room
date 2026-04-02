@@ -113,3 +113,22 @@ export async function apiAbandonSession(sessionId, token) {
   });
   return data?.session;
 }
+
+export async function apiSaveAuctionPoints(auctionResultId, pointsData, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/points`, {
+    method: "POST",
+    body: { pointsData },
+    token,
+  });
+  return data;
+}
+
+export async function apiGetAuctionPoints(auctionResultId, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/points`, { token });
+  return Array.isArray(data?.points) ? data.points : [];
+}
+
+export async function apiGetLeaderboard(token) {
+  const data = await request("/api/leaderboard", { token });
+  return Array.isArray(data?.leaderboard) ? data.leaderboard : [];
+}

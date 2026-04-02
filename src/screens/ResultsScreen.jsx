@@ -2,14 +2,64 @@ import React from "react";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
+import { apiSaveAuctionPoints } from "../lib/api.js";
 
-export function ResultsScreen({ participants, wishlists, players=[], tiers=TIERS, selectedName }) {
+export function ResultsScreen({ participants, wishlists, players=[], tiers=TIERS, selectedName, auctionResultId, user, onRefresh }) {
   const [view, setView] = React.useState("squads");
   const [analyserOpen, setAnalyserOpen] = React.useState(false);
+  const [pointsData, setPointsData] = React.useState({});
+  const [savingPoints, setSavingPoints] = React.useState(false);
 
   const allPicks = participants.flatMap(p =>
     p.squad.map(pl => ({ ...pl, owner:p.name, ownerIdx:participants.findIndex(x=>x.name===p.name) }))
   );
+
+  // Initialize points data from all players
+  React.useEffect(() => {
+    const initialized = {};
+    allPicks.forEach(pl => {
+      initialized[pl.id] = 0;
+    });
+    setPointsData(initialized);
+  }, []);
+
+  const handlePointsChange = (playerId, value) => {
+    setPointsData(prev => ({
+      ...prev,
+      [playerId]: Math.max(0, parseInt(value) || 0)
+    }));
+  };
+
+  const handleSavePoints = async () => {
+    if (!auctionResultId) {
+      alert("Auction ID not available. Cannot save points.");
+      return;
+    }
+
+    const pointsArray = allPicks
+      .filter(pl => pointsData[pl.id] > 0)
+      .map(pl => ({
+        playerId: pl.id,
+        playerName: pl.name,
+        pointsAwarded: pointsData[pl.id]
+      }));
+
+    if (pointsArray.length === 0) {
+      alert("Please enter points for at least one player.");
+      return;
+    }
+
+    setSavingPoints(true);
+    try {
+      await apiSaveAuctionPoints(auctionResultId, pointsArray, user?.token);
+      alert("Points saved successfully!");
+      onRefresh && onRefresh();
+    } catch (err) {
+      alert("Failed to save points: " + err.message);
+    } finally {
+      setSavingPoints(false);
+    }
+  };
 
   return React.createElement("div", { style:{ minHeight:"100vh", background:"#04060a", color:"#fff" } },
     analyserOpen && React.createElement(SquadAnalyser, {
@@ -28,13 +78,13 @@ export function ResultsScreen({ participants, wishlists, players=[], tiers=TIERS
           `${players.length} players · ${participants.length} teams · GL HF ⚽`)
       ),
       React.createElement("div", { style:{ display:"flex", gap:8, justifyContent:"center", marginBottom:22 } },
-        ["squads","history"].map(v =>
+        ["squads","history","points"].map(v =>
           React.createElement("button", { key:v, onClick: () => setView(v), style:{
             background: view===v ? "#FFD700" : "#0d0f16", color: view===v ? "#000" : "#888",
             border:`1px solid ${view===v ? "#FFD700" : "#1e2028"}`,
             borderRadius:8, padding:"7px 18px", cursor:"pointer",
             fontFamily:"'Bebas Neue'", fontSize:14, letterSpacing:1
-          }}, v==="squads" ? "SQUADS" : "ALL PICKS")
+          }}, v==="squads" ? "SQUADS" : v==="history" ? "ALL PICKS" : "🏆 POINTS")
         ),
         React.createElement("button", { onClick: () => setAnalyserOpen(true), style:{
           background:"#FFD70018", color:"#FFD700", border:"1px solid #FFD70044",
@@ -123,6 +173,61 @@ export function ResultsScreen({ participants, wishlists, players=[], tiers=TIERS
             }}, getTierKey(pl.rating, tiers))
           );
         })
+      ),
+
+      view==="points" && React.createElement("div", { style:{ maxWidth:800, margin:"0 auto" } },
+        React.createElement("div", { style:{ marginBottom:20 } },
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:24, color:"#FFD700", letterSpacing:2, marginBottom:10 } }, "AWARD POINTS TO PLAYERS"),
+          React.createElement("p", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "Enter the championship points for each player. The player with the highest total wins the tournament!")
+        ),
+        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
+          allPicks.sort((a,b) => b.rating-a.rating).map(pl => {
+            const td = getTierData(pl.rating, tiers);
+            return React.createElement("div", { key:pl.id, style:{
+              background:"#0a0c12", border:`1px solid ${td.border}33`, borderRadius:10, padding:14,
+              display:"flex", alignItems:"center", justifyContent:"space-between"
+            } },
+              React.createElement("div", { style:{ minWidth:0, flex:1 } },
+                React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:15, color:"#fff", marginBottom:2 } }, pl.name),
+                React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } },
+                  `${pl.pos} · ${pl.rating} (${getTierKey(pl.rating, tiers)}) · ${pl.owner}`)
+              ),
+              React.createElement("input", {
+                type:"number",
+                min:0,
+                max:999,
+                value:pointsData[pl.id] || 0,
+                onChange: (e) => handlePointsChange(pl.id, e.target.value),
+                style:{
+                  background:"#05070d", border:`1px solid ${td.border}`, borderRadius:6, color:td.color,
+                  fontFamily:"'Bebas Neue'", fontSize:18, fontWeight:700,
+                  width:60, height:40, textAlign:"center", padding:0,
+                  cursor:"pointer"
+                }
+              })
+            );
+          })
+        ),
+        React.createElement("div", { style:{ display:"flex", gap:12, marginTop:24 } },
+          React.createElement("button", {
+            onClick: () => setView("squads"),
+            style:{
+              flex:1, background:"#0d0f16", color:"#888", border:"1px solid #1e2028",
+              borderRadius:8, padding:10, cursor:"pointer",
+              fontFamily:"'Bebas Neue'", fontSize:13, letterSpacing:1
+            }
+          }, "CANCEL"),
+          React.createElement("button", {
+            onClick: handleSavePoints,
+            disabled: savingPoints,
+            style:{
+              flex:1, background:"#FFD700", color:"#000", border:"none",
+              borderRadius:8, padding:10, cursor:"pointer",
+              fontFamily:"'Bebas Neue'", fontSize:13, letterSpacing:1,
+              opacity: savingPoints ? 0.6 : 1
+            }
+          }, savingPoints ? "SAVING…" : "✓ SAVE POINTS")
+        )
       )
     )
   );

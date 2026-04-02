@@ -57,14 +57,46 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
 
     const { db } = getFirebase();
     const roomCode = String(session.roomCode).toUpperCase();
-    const normalized = withParticipantNames({ ...session, roomCode });
+    
+    // Optimize session data for Firestore storage (avoid 1MB document limit)
+    // Store only essential data and player references, not full objects
+    const optimizedSession = {
+      ...session,
+      roomCode,
+      // Store only player IDs and lot assignments, strip full player objects
+      playerPool: Array.isArray(session.playerPool) 
+        ? session.playerPool.map(p => ({ 
+            id: p.id, 
+            lot: p.lot,
+            name: p.name 
+          }))
+        : [],
+      shuffledPlayers: Array.isArray(session.shuffledPlayers)
+        ? session.shuffledPlayers.map(p => ({ 
+            id: p.id, 
+            lot: p.lot 
+          }))
+        : [],
+      participantNames: Array.isArray(session?.participants)
+        ? session.participants.map((p) => p.name)
+        : [],
+      updatedAt: Date.now(),
+    };
 
-    await db.collection("sessions").doc(String(session.id)).set(normalized, { merge: true });
+    // Check document size before storing
+    const docSize = JSON.stringify(optimizedSession).length;
+    if (docSize > 900000) { // Leave 100KB buffer below 1MB
+      return res.status(400).json({ 
+        error: "Session data too large. Please reduce player pool size." 
+      });
+    }
+
+    await db.collection("sessions").doc(String(session.id)).set(optimizedSession, { merge: true });
     await db.collection("rooms").doc(roomCode).set({ sessionId: String(session.id), roomCode, updatedAt: Date.now() }, { merge: true });
-    await persistCompletedSessionResult(db, normalized);
-    emitSessionUpdate(normalized);
+    await persistCompletedSessionResult(db, optimizedSession);
+    emitSessionUpdate(optimizedSession);
 
-    return res.status(201).json({ session: normalized });
+    return res.status(201).json({ session: optimizedSession });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to create room", 500);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -216,22 +248,45 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
     if (!session || !session.id) return res.status(400).json({ error: "session payload is required" });
 
     const { db } = getFirebase();
-    const normalized = withParticipantNames(session);
-    if (normalized.status === "complete") {
-      await persistCompletedSessionResult(db, normalized);
-      emitSessionClosed(normalized, "complete");
-      await cleanupLiveSession(db, normalized);
+    
+    // Optimize session data to avoid Firestore document size limits
+    const optimizedSession = {
+      ...session,
+      // Store only player references (IDs and lot), not full objects
+      playerPool: Array.isArray(session.playerPool) 
+        ? session.playerPool.map(p => ({ 
+            id: p.id, 
+            lot: p.lot,
+            name: p.name 
+          }))
+        : [],
+      shuffledPlayers: Array.isArray(session.shuffledPlayers)
+        ? session.shuffledPlayers.map(p => ({ 
+            id: p.id, 
+            lot: p.lot 
+          }))
+        : [],
+      participantNames: Array.isArray(session?.participants)
+        ? session.participants.map((p) => p.name)
+        : [],
+      updatedAt: Date.now(),
+    };
+
+    if (optimizedSession.status === "complete") {
+      await persistCompletedSessionResult(db, optimizedSession);
+      emitSessionClosed(optimizedSession, "complete");
+      await cleanupLiveSession(db, optimizedSession);
       return res.status(204).send();
     }
 
-    if (normalized.status === "cancelled") {
-      emitSessionClosed(normalized, "cancelled");
-      await cleanupLiveSession(db, normalized);
+    if (optimizedSession.status === "cancelled") {
+      emitSessionClosed(optimizedSession, "cancelled");
+      await cleanupLiveSession(db, optimizedSession);
       return res.status(204).send();
     }
 
-    await db.collection("sessions").doc(String(req.params.id)).set(normalized, { merge: true });
-    emitSessionUpdate(normalized);
+    await db.collection("sessions").doc(String(req.params.id)).set(optimizedSession, { merge: true });
+    emitSessionUpdate(optimizedSession);
     return res.status(204).send();
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to update session", 500);

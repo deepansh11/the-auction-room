@@ -5,7 +5,6 @@ import { BTN } from "../utils/styles.js";
 import { Spinner } from "../components/Spinner.jsx";
 import { AuthScreen } from "../screens/AuthScreen.jsx";
 import { PlayerDiscovery } from "../screens/PlayerDiscovery.jsx";
-import { Dashboard } from "../screens/Dashboard.jsx";
 import { SetupScreen } from "../screens/SetupScreen.jsx";
 import { DrawScreen } from "../screens/DrawScreen.jsx";
 import { BiddingScreen } from "../screens/BiddingScreen.jsx";
@@ -18,7 +17,7 @@ import { clearLocalAuthUser, getLocalAuthUser, setLocalAuthUser } from "../lib/l
 ───────────────────────────────────────────────────────────────────────────── */
 export default function App() {
   const [user, setUser] = React.useState(null);
-  const [screen, setScreen] = React.useState("auth"); // auth | discover | dashboard | setup | draw | bidding | results
+  const [screen, setScreen] = React.useState("auth"); // auth | discover | setup | draw | bidding | results
   const [session, setSession] = React.useState(null);
   const [finalParticipants, setFinalParticipants] = React.useState(null);
   const [wishlists, setWishlists] = React.useState({}); // { participantName: [playerId, ...] }
@@ -322,11 +321,6 @@ export default function App() {
       lastRoomCode,
       onLoadSession: handleLoadSession,
       onWishlist: (playerId) => handleWishlist(user.username, playerId)
-    }),
-    screen === "dashboard" && user && React.createElement(Dashboard, {
-      user, onLogout:handleLogout,
-      onNewSession: () => setScreen("setup"),
-      onLoadSession: handleLoadSession
     }),
     screen === "setup" && user && React.createElement(React.Fragment, null,
       React.createElement(Nav, null),

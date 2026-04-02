@@ -51,14 +51,25 @@ export function downloadSquadImage(participant, {
   ctx.font = "28px Arial";
   ctx.fillText(`Formation: ${formation}    Budget Left: ${participant.budget || 0}M    Squad: ${squad.length}`, 50, 205);
 
+  ctx.fillStyle = "#FFD700";
+  ctx.font = "bold 24px Arial";
+  let clubY = 235;
+  squad.slice(0, 5).forEach((pl) => {
+    if (!clubY || clubY > 200) return;
+  });
+  const clubList = [...new Set(squad.map(p => p.club))].join(" • ");
+  ctx.fillStyle = "#9aa4b2";
+  ctx.font = "18px Arial";
+  ctx.fillText(`Clubs: ${clubList}`, 50, 235);
+
   ctx.fillStyle = "#1a2233";
-  ctx.fillRect(50, 240, 1100, 700);
+  ctx.fillRect(50, 270, 1100, 670);
 
   ctx.fillStyle = "#FFD700";
   ctx.font = "bold 32px Arial";
-  ctx.fillText("STARTING XI", 70, 290);
+  ctx.fillText("STARTING XI", 70, 320);
 
-  let y = 340;
+  let y = 370;
   starters.forEach((entry) => {
     const pl = entry.player;
     const line = pl
@@ -71,11 +82,11 @@ export function downloadSquadImage(participant, {
   });
 
   ctx.fillStyle = "#1a2233";
-  ctx.fillRect(50, 980, 1100, 450);
+  ctx.fillRect(50, 1010, 1100, 420);
 
   ctx.fillStyle = "#FFD700";
   ctx.font = "bold 32px Arial";
-  ctx.fillText(`BENCH (${bench.length})`, 70, 1030);
+  ctx.fillText(`BENCH (${bench.length})`, 70, 1060);
 
   let by = 1080;
   if (bench.length === 0) {

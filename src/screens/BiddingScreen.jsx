@@ -714,7 +714,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                 isWishlist: wl,
                 onWishlist: id => onWishlist(currentPickerName||user.username, id),
                 tiers: activeTiers,
-                animDelay: i*.02
+                animDelay: i*.02,
+                wishlists: wishlists,
+                participants: participants,
+                currentUserName: user.username
               });
             })
           );

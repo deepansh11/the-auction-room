@@ -7,7 +7,7 @@ export const TIERS = {
   "S+": { min:89, max:99, price:22, color:"#FFD700", bg:"#FFD70018", border:"#FFD70055" },
   "S":  { min:87, max:88, price:18, color:"#E8C547", bg:"#E8C54718", border:"#E8C54755" },
   "A+": { min:84, max:86, price:15, color:"#C0C0C0", bg:"#C0C0C018", border:"#C0C0C055" },
-  "A":  { min:80, max:83, price:10, color:"#CD7F32", bg:"#CD7F3218", border:"#CD7F3255" },
+  "A":  { min:80, max:83, price:12, color:"#CD7F32", bg:"#CD7F3218", border:"#CD7F3255" },
   "B":  { min:79, max:79, price: 8, color:"#4FC3F7", bg:"#4FC3F718", border:"#4FC3F755" },
 };
 

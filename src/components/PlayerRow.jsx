@@ -64,13 +64,16 @@ function getStatPairs(player) {
   ];
 }
 
-export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAfford, isWishlist, onWishlist, tiers=TIERS, animDelay=0 }) {
+export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAfford, isWishlist, onWishlist, tiers=TIERS, animDelay=0, wishlists=[], participants=[], currentUserName="" }) {
   const [faceFailed, setFaceFailed] = React.useState(false);
   const td = getTierData(player.rating, tiers);
   const tk = getTierKey(player.rating, tiers);
   const pg = POS_GROUPS[getPosGroup(player.pos)];
   const positionsText = player.positionsText || player.positions?.join(", ") || player.pos;
   const statPairs = getStatPairs(player);
+
+  // Check if this player is in my squad
+  const inMySquad = participants?.find(p => p.name === currentUserName)?.squad?.some(s => s.id === player.id) ?? false;
 
   return React.createElement("div", {
     style: {
@@ -189,18 +192,21 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
     ),
 
     React.createElement("div", { style: { textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 } },
-      React.createElement("button", {
-        onClick: () => { sfx("wishlist"); onWishlist(player.id); },
-        style: {
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          fontSize: 15,
-          color: isWishlist ? "#FF3D71" : "#333",
-          padding: 0,
-          lineHeight: 1,
-        }
-      }, isWishlist ? "❤️" : "🤍"),
+      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
+        inMySquad && React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 9, color: "#00FF88", fontWeight: 700, background: "#00FF8822", borderRadius: 3, padding: "2px 4px" } }, "IN MY SQUAD"),
+        React.createElement("button", {
+          onClick: () => { sfx("wishlist"); onWishlist(player.id); },
+          style: {
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontSize: 15,
+            color: isWishlist ? "#FF3D71" : "#333",
+            padding: 0,
+            lineHeight: 1,
+          }
+        }, isWishlist ? "❤️" : "🤍")
+      ),
       owned
         ? React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: ownerColor, fontWeight: 700 } }, `✓ ${ownerName}`)
         : cantAfford

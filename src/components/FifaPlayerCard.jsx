@@ -241,7 +241,10 @@ export function FifaPlayerCard({
       ),
       onToggleWishlist
         ? React.createElement("button", {
-            onClick: onToggleWishlist,
+            onClick: (e) => {
+              e.stopPropagation();
+              onToggleWishlist();
+            },
             style: {
               background: "transparent",
               border: "none",
