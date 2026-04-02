@@ -16,6 +16,7 @@ function serializeUser(user) {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     wishlists: user.wishlists || {},
+    role: user.role,
   };
 }
 

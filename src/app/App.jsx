@@ -9,6 +9,8 @@ import { SetupScreen } from "../screens/SetupScreen.jsx";
 import { DrawScreen } from "../screens/DrawScreen.jsx";
 import { BiddingScreen } from "../screens/BiddingScreen.jsx";
 import { ResultsScreen } from "../screens/ResultsScreen.jsx";
+import { CountdownTimer } from "../components/CountdownTimer.jsx";
+import { BoisBanner } from "../components/BoisBanner.jsx";
 import { getRoomCodeFromUrl, isValidRoomCode } from "../utils/roomUtils.js";
 import { clearLocalAuthUser, getLocalAuthUser, setLocalAuthUser } from "../lib/localAuth.js";
 
@@ -310,6 +312,8 @@ export default function App() {
   );
 
   return React.createElement("div", null,
+    user?.role === "bois" && React.createElement(BoisBanner, null),
+    user?.role === "bois" && React.createElement(CountdownTimer, null),
     screen === "auth" && React.createElement(AuthScreen, { onAuth:handleAuth, pendingRoomCode }),
     screen === "discover" && user && React.createElement(PlayerDiscovery, {
       user,

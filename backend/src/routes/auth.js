@@ -59,6 +59,7 @@ router.post("/auth/register", async (req, res) => {
         uid: user.uid,
         username: user.username,
         wishlists: {},
+        role: user.role,
       },
       token,
     });
@@ -92,6 +93,7 @@ router.post("/auth/login", async (req, res) => {
         uid: userData.uid,
         username: userData?.username || username.trim(),
         wishlists: userData?.wishlists || {},
+        role: userData?.role,
       },
       token,
     });
