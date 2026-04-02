@@ -66,7 +66,7 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "256kb" }));
+app.use(express.json({ limit: "5mb" })); // Increased to support large player pools
 
 app.use("/api", healthRoutes);
 app.use("/api", authRoutes);

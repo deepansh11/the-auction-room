@@ -65,7 +65,25 @@ export async function apiUpdateWishlists(wishlists, token) {
 }
 
 export async function apiCreateRoom(session, token) {
-  const data = await request("/api/rooms", { method: "POST", body: { session }, token });
+  // Optimize session data to reduce payload size and avoid Express 256KB limit
+  // Strip full player objects, keep only essential references
+  const optimizedSession = {
+    ...session,
+    playerPool: Array.isArray(session.playerPool)
+      ? session.playerPool.map(p => ({
+          id: p.id,
+          lot: p.lot,
+          name: p.name
+        }))
+      : [],
+    shuffledPlayers: Array.isArray(session.shuffledPlayers)
+      ? session.shuffledPlayers.map(p => ({
+          id: p.id,
+          lot: p.lot
+        }))
+      : [],
+  };
+  const data = await request("/api/rooms", { method: "POST", body: { session: optimizedSession }, token });
   return data?.session;
 }
 
