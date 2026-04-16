@@ -1,5 +1,19 @@
 import { CAN_FILL, FORMATIONS, TIERS } from "../game/constants.js";
 
+function sortPlayersByClub(players = []) {
+  return [...players].sort((a, b) => {
+    const clubA = String(a?.club || "Unknown Club");
+    const clubB = String(b?.club || "Unknown Club");
+    const byClub = clubA.localeCompare(clubB);
+    if (byClub !== 0) return byClub;
+
+    const byRating = Number(b?.rating || 0) - Number(a?.rating || 0);
+    if (byRating !== 0) return byRating;
+
+    return String(a?.name || "").localeCompare(String(b?.name || ""));
+  });
+}
+
 function assignLineupForFormation(squad, formationKey) {
   const rows = FORMATIONS[formationKey] || FORMATIONS["4-3-3"];
   const allSlots = rows.flat();
@@ -28,7 +42,9 @@ export function downloadSquadImage(participant, {
 } = {}) {
   if (!participant || typeof document === "undefined") return;
   const squad = Array.isArray(participant.squad) ? participant.squad : [];
+  const sortedSquad = sortPlayersByClub(squad);
   const { starters, bench } = assignLineupForFormation(squad, formation);
+  const sortedBench = sortPlayersByClub(bench);
 
   const canvas = document.createElement("canvas");
   canvas.width = 1200;
@@ -53,11 +69,7 @@ export function downloadSquadImage(participant, {
 
   ctx.fillStyle = "#FFD700";
   ctx.font = "bold 24px Arial";
-  let clubY = 235;
-  squad.slice(0, 5).forEach((pl) => {
-    if (!clubY || clubY > 200) return;
-  });
-  const clubList = [...new Set(squad.map(p => p.club))].join(" • ");
+  const clubList = [...new Set(sortedSquad.map((p) => p.club || "Unknown Club"))].join(" • ");
   ctx.fillStyle = "#9aa4b2";
   ctx.font = "18px Arial";
   ctx.fillText(`Clubs: ${clubList}`, 50, 235);
@@ -73,7 +85,7 @@ export function downloadSquadImage(participant, {
   starters.forEach((entry) => {
     const pl = entry.player;
     const line = pl
-      ? `${entry.slot}  -  ${pl.name} (${pl.pos})  ${pl.rating}`
+      ? `${entry.slot}  -  ${pl.name} (${pl.club || "Unknown Club"}) (${pl.pos})  ${pl.rating}`
       : `${entry.slot}  -  EMPTY`;
     ctx.fillStyle = pl ? "#e6edf7" : "#7f8aa3";
     ctx.font = "26px Arial";
@@ -89,15 +101,15 @@ export function downloadSquadImage(participant, {
   ctx.fillText(`BENCH (${bench.length})`, 70, 1060);
 
   let by = 1080;
-  if (bench.length === 0) {
+  if (sortedBench.length === 0) {
     ctx.fillStyle = "#7f8aa3";
     ctx.font = "26px Arial";
     ctx.fillText("No bench players", 80, by);
   } else {
-    bench.forEach((pl) => {
+    sortedBench.forEach((pl) => {
       ctx.fillStyle = "#e6edf7";
       ctx.font = "26px Arial";
-      ctx.fillText(`${pl.name} (${pl.pos})  ${pl.rating}`, 80, by);
+      ctx.fillText(`${pl.name} (${pl.club || "Unknown Club"}) (${pl.pos})  ${pl.rating}`, 80, by);
       by += 44;
     });
   }
