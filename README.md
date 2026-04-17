@@ -63,12 +63,15 @@ Create `backend/.env` with:
 NODE_ENV=development
 PORT=4000
 CORS_ORIGINS=http://localhost:5173
+AUTH_JWT_SECRET=your-long-random-jwt-signing-secret
 
 FIREBASE_PROJECT_ID=your-firebase-project-id
 FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@your-firebase-project-id.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----\n"
 FIREBASE_WEB_API_KEY=your-firebase-web-api-key
 ```
+
+`AUTH_JWT_SECRET` is required by the backend to sign and verify login tokens. Use any long random private string for local development.
 
 ### Frontend Environment
 

@@ -419,8 +419,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
     sfx("pick");
 
+    const pickedAt = Date.now();
+    const pickedPlayer = { ...player, pickedAt };
+
     const updatedParticipants = participants.map(x => x.name === part.name
-      ? { ...x, budget: x.budget - td.price, squad: [...x.squad, player] }
+      ? { ...x, budget: x.budget - td.price, squad: [...x.squad, pickedPlayer] }
       : x
     );
     setParticipants(updatedParticipants);
@@ -431,11 +434,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     const newAvail = availablePlayers.filter(p => p.id !== player.id);
     const newTurnIdx = active.length > 0 ? (turnIdx + 1) % active.length : 0;
     const pickEvent = {
-      id: `${Date.now()}-${player.id}`,
+      id: `${pickedAt}-${player.id}`,
       picker: part.name,
       playerId: player.id,
       playerName: player.name,
-      at: Date.now(),
+      at: pickedAt,
     };
     lastPickEventRef.current = pickEvent.id;
 
@@ -526,6 +529,16 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const isAtCap = currentParticipant && currentParticipant.squad.length >= SQUAD_MAX;
   const showSelfPickLoader = Boolean(userCanAct && actionPending && actionKind === "pick");
   const showWaitingOverlay = Boolean(lotOpen && !lotClosing && currentPickerName && !userCanAct);
+  const recentPicks = participants
+    .flatMap(p => p.squad.map(pl => ({ ...pl, owner:p.name, ownerIdx:participants.findIndex(x=>x.name===p.name) })))
+    .sort((a, b) => {
+      const aPickedAt = Number(a?.pickedAt);
+      const bPickedAt = Number(b?.pickedAt);
+      const aRecent = Number.isFinite(aPickedAt) ? aPickedAt : Number(a?.id) || 0;
+      const bRecent = Number.isFinite(bPickedAt) ? bPickedAt : Number(b?.id) || 0;
+      return bRecent - aRecent;
+    })
+    .slice(0, 6);
 
   React.useEffect(() => {
     let timerId = null;
@@ -826,10 +839,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       React.createElement("div", { style:{ borderTop:"1px solid #0f1218", padding:"8px 10px", flexShrink:0 } },
         React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#333", letterSpacing:3, marginBottom:5 } }, "RECENT"),
         React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:2, maxHeight:120, overflowY:"auto" } },
-          participants.flatMap(p => p.squad.map(pl => ({ ...pl, owner:p.name, ownerIdx:participants.findIndex(x=>x.name===p.name) })))
-            .sort((a,b) => b.id-a.id).slice(0,6).map((pl, i) => {
+          recentPicks.map((pl) => {
             const td = getTierData(pl.rating, activeTiers);
-            return React.createElement("div", { key:i, style:{
+            return React.createElement("div", { key:`${pl.owner}-${pl.id}-${pl.pickedAt || 0}`, style:{
               display:"flex", justifyContent:"space-between", alignItems:"center",
               padding:"3px 6px", background:"#0a0c10", borderRadius:4
             }},
