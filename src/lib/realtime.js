@@ -14,8 +14,11 @@ function getSocket() {
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: Infinity,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 3000,
+      // Start at 2 s, double each attempt, cap at 60 s.
+      // This prevents a reconnect storm if the server is down or overloaded.
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 60000,
+      randomizationFactor: 0.4,
     });
   }
   return sharedSocket;

@@ -233,9 +233,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     let cancelled = false;
     let timerId = null;
     let failCount = 0;
-    const BASE_POLL_MS = 9000;
-    const HIDDEN_POLL_MS = 15000;
-    const BACKOFF_MS = [3000, 5000, 8000];
+    const BASE_POLL_MS = 15000;       // increased: real-time updates come via Socket.IO
+    const HIDDEN_POLL_MS = 60000;     // tab is backgrounded — no need to hammer the server
+    const BACKOFF_MS = [5000, 10000, 20000];
+    let lastReconnectSyncAt = 0;       // debounce reconnect-triggered syncs
 
     const applyLatest = (latest) => {
       if (!latest || cancelled) return;
@@ -370,6 +371,12 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         onAbandon();
       },
       onReconnect: () => {
+        // Debounce: a burst of rapid reconnects (e.g. flaky connection) must not flood the
+        // server with simultaneous GET /sessions requests. Allow at most one triggered sync
+        // per 15 seconds; the regular poll will catch up for anything that falls within the gap.
+        const now = Date.now();
+        if (now - lastReconnectSyncAt < 15000) return;
+        lastReconnectSyncAt = now;
         syncNowRef.current?.();
       },
     }, user.username);

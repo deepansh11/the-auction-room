@@ -19,9 +19,10 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
     let cancelled = false;
     let timerId = null;
     let failCount = 0;
-    const BASE_POLL_MS = 9000;
-    const HIDDEN_POLL_MS = 15000;
-    const BACKOFF_MS = [3000, 5000, 8000];
+    const BASE_POLL_MS = 15000;
+    const HIDDEN_POLL_MS = 60000;
+    const BACKOFF_MS = [5000, 10000, 20000];
+    let lastReconnectSyncAt = 0;
 
     const applyLatest = (latest) => {
       if (!latest || cancelled) return;
@@ -99,6 +100,9 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
         applyLatest(next);
       },
       onReconnect: () => {
+        const now = Date.now();
+        if (now - lastReconnectSyncAt < 15000) return;
+        lastReconnectSyncAt = now;
         syncNowRef.current?.();
       },
     }, user?.username);
