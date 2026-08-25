@@ -4,7 +4,8 @@ import { BTN } from "../utils/styles.js";
 import { PCOLORS, FORMATIONS, BUDGET, SQUAD_MIN, SQUAD_MAX, TIERS, getTierKey, getTierData } from "../game/constants.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
 
-export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS, selectedName, onClose }) {
+export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS, selectedName, onClose,
+  hidden=false, mysteryEnabled=false, mysteryCardUsed=false, mysteryCardPrice=20 }) {
   const selfOnlyParticipants = React.useMemo(() => {
     if (!Array.isArray(participants) || participants.length === 0) return [];
     if (selectedName) {
@@ -17,6 +18,11 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
   const [sel, setSel] = React.useState(selfOnlyParticipants[0]?.name || "");
   const [fmts, setFmts] = React.useState({});
   const [tab, setTab] = React.useState("pitch");
+  const [plannedTargets, setPlannedTargets] = React.useState({});
+  const [pitchAssignments, setPitchAssignments] = React.useState({});
+  const [tierBuyPlan, setTierBuyPlan] = React.useState({});
+  const [reserveMystery, setReserveMystery] = React.useState(false);
+  const [benchPinned, setBenchPinned] = React.useState({});
 
   React.useEffect(() => {
     if (selectedName && selfOnlyParticipants.some((x) => x.name === selectedName)) {
@@ -40,6 +46,58 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
   const tierCounts = {};
   squad.forEach(pl => { const k = getTierKey(pl.rating, tiers); tierCounts[k] = (tierCounts[k] || 0) + 1; });
 
+  // Planned squad-size target: how many players this bidder intends to end up with. Synced live
+  // against how many they've actually bought as the auction progresses.
+  const plannedTarget = plannedTargets[p?.name] ?? SQUAD_MAX;
+  const remainingSlots = Math.max(plannedTarget - squad.length, 0);
+
+  // Manual pitch placements are kept per participant *and* per formation (slot indices only make
+  // sense within a given formation's shape).
+  const assignmentsKey = `${p?.name || ""}:${fmt}`;
+  const currentAssignments = pitchAssignments[assignmentsKey] || {};
+
+  const myBenchPinned = benchPinned[p?.name] || new Set();
+
+  const handlePitchAssign = (slotKey, playerId) => {
+    // Moving to pitch: remove from bench-pinned so auto-fill can see them again
+    setBenchPinned((prev) => {
+      const s = new Set(prev[p.name] || []);
+      s.delete(playerId);
+      return { ...prev, [p.name]: s };
+    });
+    setPitchAssignments((prev) => {
+      const existing = { ...(prev[assignmentsKey] || {}) };
+      Object.keys(existing).forEach((k) => { if (existing[k] === playerId) delete existing[k]; });
+      existing[slotKey] = playerId;
+      return { ...prev, [assignmentsKey]: existing };
+    });
+  };
+
+  const handlePitchUnassign = (playerId) => {
+    // Pin to bench so auto-fill never re-assigns them
+    setBenchPinned((prev) => {
+      const s = new Set(prev[p.name] || []);
+      s.add(playerId);
+      return { ...prev, [p.name]: s };
+    });
+    setPitchAssignments((prev) => {
+      const existing = { ...(prev[assignmentsKey] || {}) };
+      Object.keys(existing).forEach((k) => { if (existing[k] === playerId) delete existing[k]; });
+      return { ...prev, [assignmentsKey]: existing };
+    });
+  };
+
+  // Every tier-count combination that could still fit into the remaining planned slots without
+  // Per-tier manual buy planner
+  const myPlan = tierBuyPlan[p?.name] || {};
+  const planTotal = Object.entries(myPlan).reduce((sum, [key, count]) => {
+    return sum + Number(count || 0) * Number(tiers[key]?.price || 0);
+  }, 0);
+  const planSlots = Object.values(myPlan).reduce((sum, c) => sum + Number(c || 0), 0);
+  const mysteryReserved = mysteryEnabled && !mysteryCardUsed && reserveMystery ? mysteryCardPrice : 0;
+  const effectiveBudget = (p?.budget || 0) - mysteryReserved;
+  const planFits = planTotal <= effectiveBudget;
+
   const handleDownloadSquadImage = () => {
     if (!p) return;
     downloadSquadImage(p, { formation: fmt, tiers });
@@ -48,7 +106,7 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
   return React.createElement("div", {
     onClick: e => e.target === e.currentTarget && onClose(),
     style:{ position:"fixed", inset:0, background:"rgba(0,0,0,.88)",
-      zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center",
+      zIndex:1000, display: hidden ? "none" : "flex", alignItems:"center", justifyContent:"center",
       padding:16, backdropFilter:"blur(8px)", animation:"fadeIn .2s ease" }
   },
     React.createElement("div", {
@@ -95,55 +153,150 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
 
       tab === "pitch" && React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 200px", gap:18 } },
         React.createElement("div", null,
-          React.createElement("div", { style:{ marginBottom:10, display:"flex", gap:5, flexWrap:"wrap" } },
-            Object.keys(FORMATIONS).map(f =>
-              React.createElement("button", { key:f, onClick: () => setFmts(prev => ({...prev,[p.name]:f})), style:{
-                background: fmt===f ? `${PCOLORS[pIdx]}22` : "#111",
-                border:`1px solid ${fmt===f ? PCOLORS[pIdx] : "#222"}`,
-                color: fmt===f ? PCOLORS[pIdx] : "#555",
-                borderRadius:6, padding:"3px 10px", cursor:"pointer",
-                fontFamily:"'Bebas Neue'", fontSize:12
-              }}, f)
-            )
+          React.createElement("div", { style:{ marginBottom:10, display:"flex", alignItems:"center", gap:8 } },
+            React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:2 } }, "FORMATION"),
+            React.createElement("select", {
+              value: fmt,
+              onChange: (e) => setFmts(prev => ({ ...prev, [p.name]: e.target.value })),
+              style:{
+                background:"#111", border:`1px solid ${PCOLORS[pIdx]}55`, color:PCOLORS[pIdx],
+                borderRadius:6, padding:"5px 10px", cursor:"pointer",
+                fontFamily:"'Bebas Neue'", fontSize:13, letterSpacing:1, outline:"none"
+              }
+            }, Object.keys(FORMATIONS).map(f => React.createElement("option", { key:f, value:f, style:{ background:"#111", color:"#fff" } }, f)))
           ),
           squad.length > 0
-            ? React.createElement(PitchView, { squad, formation:fmt, tiers })
+            ? React.createElement(PitchView, {
+                squad, formation:fmt, tiers, interactive:true,
+                assignments: currentAssignments,
+                benchPinnedIds: myBenchPinned,
+                onAssign: handlePitchAssign,
+                onUnassign: handlePitchUnassign,
+              })
             : React.createElement("div", { style:{ height:160, display:"flex", alignItems:"center",
                 justifyContent:"center", color:"#333", fontFamily:"'Rajdhani'", fontSize:14 } }, "No players yet")
         ),
-        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
-          React.createElement("div", { style:{ background:"#0d0f16", borderRadius:10, padding:12 } },
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:2, marginBottom:4 } }, "SQUAD SIZE"),
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:34,
-              color: valid ? "#00FF88" : "#FF3D71", lineHeight:1 } },
-              squad.length, React.createElement("span", { style:{ fontSize:14, color:"#555" } }, "/16–17")
+        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:0 } },
+          // ── Single unified panel ──────────────────────────────────────────────
+          React.createElement("div", { style:{ background:"#0d0f16", borderRadius:10, padding:14 } },
+            // Row 1: Squad size + validity
+            React.createElement("div", { style:{ display:"flex", alignItems:"baseline", gap:6, marginBottom:6 } },
+              React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:28,
+                color: valid ? "#00FF88" : "#FF3D71", lineHeight:1 } }, squad.length),
+              React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#444" } }, "/16"),
+              React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700, marginLeft:4,
+                color: squad.length < SQUAD_MIN ? "#FF3D71" : squad.length > SQUAD_MAX ? "#FF3D71" : "#00FF88" } },
+                squad.length < SQUAD_MIN ? `Need ${SQUAD_MIN-squad.length} more`
+                : squad.length > SQUAD_MAX ? "Over limit ⚠" : "✓ Valid squad"
+              )
             ),
-            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:10, marginTop:3,
-              color: squad.length < SQUAD_MIN ? "#FF3D71" : squad.length > SQUAD_MAX ? "#FF3D71" : "#00FF88" } },
-              squad.length < SQUAD_MIN ? `Need ${SQUAD_MIN-squad.length} more`
-              : squad.length > SQUAD_MAX ? "Over limit ⚠"
-              : "✓ Valid squad"
-            )
-          ),
-          React.createElement("div", { style:{ background:"#0d0f16", borderRadius:10, padding:12 } },
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:2, marginBottom:6 } }, "BUDGET"),
-            React.createElement("div", { style:{ height:4, background:"#1a1c22", borderRadius:2, overflow:"hidden", marginBottom:5 } },
-              React.createElement("div", { style:{ height:"100%", width:`${(p.budget/BUDGET)*100}%`,
+            // Row 2: Budget bar + labels
+            React.createElement("div", { style:{ height:3, background:"#1a1c22", borderRadius:2, overflow:"hidden", marginBottom:4 } },
+              React.createElement("div", { style:{ height:"100%", width:`${Math.min(100,(spent/BUDGET)*100)}%`,
                 background:"#FFD700", borderRadius:2, transition:"width .5s" } })
             ),
-            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", fontFamily:"'Rajdhani'", fontSize:11 } },
-              React.createElement("span", { style:{ color:"#888" } }, `Spent `, React.createElement("span", { style:{ color:"#FFD700" } }, `${spent}M`)),
-              React.createElement("span", { style:{ color:"#888" } }, `Left `, React.createElement("span", { style:{ color:"#00FF88" } }, `${p.budget}M`))
-            )
-          ),
-          React.createElement("div", { style:{ background:"#0d0f16", borderRadius:10, padding:12 } },
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:2, marginBottom:6 } }, "TIER MIX"),
-            Object.entries(tiers).map(([k,t]) => tierCounts[k]
-              ? React.createElement("div", { key:k, style:{ display:"flex", justifyContent:"space-between", marginBottom:3 } },
-                  React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:12, color:t.color } }, k),
-                  React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#888" } }, `${tierCounts[k]}×`)
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", fontFamily:"'Rajdhani'", fontSize:10, marginBottom:8 } },
+              React.createElement("span", { style:{ color:"#666" } }, "Spent ",
+                React.createElement("span", { style:{ color:"#FFD700", fontWeight:700 } }, `${spent}M`)),
+              React.createElement("span", { style:{ color:"#666" } }, "Left ",
+                React.createElement("span", { style:{ color:"#00FF88", fontWeight:700 } }, `${p.budget}M`))
+            ),
+            // Row 3: Tier mix chips + mystery card if used
+            (Object.keys(tierCounts).length > 0 || mysteryCardUsed) && React.createElement("div", {
+              style:{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:10, paddingBottom:10, borderBottom:"1px solid #1a1c22" }
+            },
+              Object.entries(tiers).map(([k,t]) => tierCounts[k]
+                ? React.createElement("span", { key:k, style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:t.color,
+                    background:t.bg, border:`1px solid ${t.border}`, borderRadius:4, padding:"2px 6px" } },
+                    `${k} ${tierCounts[k]}×`)
+                : null
+              ),
+              mysteryCardUsed && React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#FFD700",
+                background:"#FFD70018", border:"1px solid #FFD70044", borderRadius:4, padding:"2px 6px" } },
+                `🎴 ${mysteryCardPrice}M`)
+            ),
+            // ── Buy planner ────────────────────────────────────────────────────
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 } },
+              React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:2 } }, "PLAN MORE BUYS"),
+              React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
+                mysteryEnabled && !mysteryCardUsed && React.createElement("label", { style:{ display:"flex", alignItems:"center", gap:3, cursor:"pointer" } },
+                  React.createElement("input", {
+                    type:"checkbox", checked: reserveMystery,
+                    onChange: (e) => setReserveMystery(e.target.checked),
+                    style:{ accentColor:"#FFD700", width:10, height:10 }
+                  }),
+                  React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:8, color:"#888" } }, `−${mysteryCardPrice}M 🎴`)
+                ),
+                React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:4 } },
+                  React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#555" } }, "Target"),
+                  React.createElement("input", {
+                    type:"number", min:1, max:SQUAD_MAX, value: plannedTarget,
+                    onChange: (e) => {
+                      const next = Math.max(1, Math.min(SQUAD_MAX, Number(e.target.value) || SQUAD_MAX));
+                      setPlannedTargets((prev) => ({ ...prev, [p.name]: next }));
+                    },
+                    style:{ width:36, background:"#05070d", border:"1px solid #1e2028", borderRadius:4,
+                      color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:12, textAlign:"center", padding:"1px 0" }
+                  })
                 )
-              : null
+              )
+            ),
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#555", marginBottom:8 } },
+              React.createElement("span", { style:{ color:"#00FF88", fontWeight:700 } }, squad.length),
+              " bought · ",
+              React.createElement("span", { style:{ color: remainingSlots > 0 ? "#FFD700" : "#555", fontWeight:700 } }, remainingSlots),
+              " slots left · ",
+              React.createElement("span", { style:{ color:"#00FF88", fontWeight:700 } }, `${p.budget}M`),
+              " budget"
+            ),
+            // Tier rows — show already-bought count alongside the "plan more" input
+            Object.entries(tiers).map(([key, t]) =>
+              React.createElement("div", { key, style:{ display:"grid", gridTemplateColumns:"28px 22px 1fr 28px 38px", alignItems:"center", gap:3, marginBottom:5 } },
+                React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:t.color } }, key),
+                // Already-bought badge
+                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#555", textAlign:"center" } },
+                  tierCounts[key] ? `${tierCounts[key]}×` : ""
+                ),
+                React.createElement("input", {
+                  type:"number", min:0, max:SQUAD_MAX,
+                  value: myPlan[key] ?? "",
+                  placeholder:"0",
+                  onChange: (e) => {
+                    const val = Math.max(0, Math.min(SQUAD_MAX, Number(e.target.value) || 0));
+                    setTierBuyPlan((prev) => ({ ...prev, [p.name]: { ...(prev[p.name] || {}), [key]: val } }));
+                  },
+                  style:{ background:"#05070d", border:`1px solid ${t.border}`,
+                    borderRadius:4, padding:"3px 5px", color:t.color,
+                    fontFamily:"'Bebas Neue'", fontSize:12, textAlign:"center", outline:"none", width:"100%" }
+                }),
+                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#555", textAlign:"right" } }, `${t.price}M`),
+                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:t.color, textAlign:"right", fontWeight:700 } },
+                  Number(myPlan[key] || 0) > 0 ? `${Number(myPlan[key]) * t.price}M` : "—"
+                )
+              )
+            ),
+            // Summary bar
+            React.createElement("div", { style:{ borderTop:"1px solid #1a1c22", marginTop:6, paddingTop:6 } },
+              React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 } },
+                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#888" } },
+                  `${planSlots}p planned · ${planTotal}M`
+                ),
+                React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color: planFits ? "#00FF88" : "#FF3D71" } },
+                  `${effectiveBudget}M usable`
+                )
+              ),
+              React.createElement("div", { style:{ height:3, background:"#1a1c22", borderRadius:2, overflow:"hidden" } },
+                React.createElement("div", { style:{
+                  height:"100%", borderRadius:2, transition:"width .3s",
+                  background: planFits ? "#FFD700" : "#FF3D71",
+                  width: `${Math.min(100, effectiveBudget > 0 ? (planTotal / effectiveBudget) * 100 : 0)}%`,
+                }})
+              ),
+              React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:9, marginTop:3, color: planFits ? "#444" : "#FF6B35" } },
+                planFits
+                  ? (planTotal > 0 ? `${effectiveBudget - planTotal}M remaining after plan` : "Enter player counts above")
+                  : `Over budget by ${planTotal - effectiveBudget}M`
+              )
             )
           )
         )

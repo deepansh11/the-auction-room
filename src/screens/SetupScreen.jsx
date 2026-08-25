@@ -2,11 +2,9 @@ import React from "react";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
 import { assignPlayersToLots, loadPlayersFromCsv } from "../data/csvPlayerLoader.js";
-import { BUDGET, LOTS, PCOLORS, TIERS, getTierKey } from "../game/constants.js";
+import { BUDGET, MYSTERY_CARD_PRICE, PCOLORS, TIERS, getTierKey } from "../game/constants.js";
 import { cloneTierConfig, normalizeTiers } from "../game/tierUtils.js";
 import { generateRoomCode } from "../utils/roomUtils.js";
-import { assignLotsToPlayers } from "../game/lotDistribution.js";
-import { shuffleArray } from "../utils/random.js";
 import { ShareScreen } from "./ShareScreen.jsx";
 
 export function SetupScreen({ user, onStart }) {
@@ -14,7 +12,6 @@ export function SetupScreen({ user, onStart }) {
   const [count, setCount] = React.useState(5);
   const [names, setNames] = React.useState(Array.from({length:5}, (_,i) => i===0 ? user.username : `Player ${i+1}`));
   const [roomCode, setRoomCode] = React.useState(generateRoomCode);
-  const [ready, setReady] = React.useState(false);
   const [basePlayers, setBasePlayers] = React.useState([]);
   const [loadingPool, setLoadingPool] = React.useState(true);
   const [poolError, setPoolError] = React.useState("");
@@ -22,6 +19,9 @@ export function SetupScreen({ user, onStart }) {
   const [search, setSearch] = React.useState("");
   const [tierConfig, setTierConfig] = React.useState(cloneTierConfig(TIERS));
   const [budget, setBudget] = React.useState(BUDGET);
+  const [mysteryEnabled, setMysteryEnabled] = React.useState(true);
+  const [groupsEnabled, setGroupsEnabled] = React.useState(true);
+  const [groupCount, setGroupCount] = React.useState(2);
   const [showShare, setShowShare] = React.useState(false);
   const [sessionData, setSessionData] = React.useState(null);
   const [copyStatus, setCopyStatus] = React.useState("");
@@ -44,7 +44,7 @@ export function SetupScreen({ user, onStart }) {
   React.useEffect(() => {
     if (basePlayers.length > 0 && excludedIds.size === 0) {
       const requiredPlayers = count * PLAYERS_PER_PERSON;
-      const allBasePlayers = basePlayers.filter(p => p.rating >= 79);
+      const allBasePlayers = basePlayers.filter(p => p.rating >= 80);
       const sortedByRating = [...allBasePlayers].sort((a, b) => b.rating - a.rating);
       const topPlayerIds = new Set(sortedByRating.slice(0, requiredPlayers).map(p => p.id));
       const newExcluded = new Set(allBasePlayers.filter(p => !topPlayerIds.has(p.id)).map(p => p.id));
@@ -76,7 +76,7 @@ export function SetupScreen({ user, onStart }) {
     
     // Auto-select top 26*n players by rating
     const requiredPlayers = n * PLAYERS_PER_PERSON;
-    const allBasePlayers = basePlayers.filter(p => p.rating >= 79);
+    const allBasePlayers = basePlayers.filter(p => p.rating >= 80);
     const sortedByRating = [...allBasePlayers].sort((a, b) => b.rating - a.rating);
     const topPlayerIds = new Set(sortedByRating.slice(0, requiredPlayers).map(p => p.id));
     const newExcluded = new Set(allBasePlayers.filter(p => !topPlayerIds.has(p.id)).map(p => p.id));
@@ -105,8 +105,19 @@ export function SetupScreen({ user, onStart }) {
   };
 
   const selectedBasePlayers = basePlayers.filter((p) => !excludedIds.has(p.id));
-  const selectedPlayers = selectedBasePlayers.filter((p) => p.rating >= 79);
+  const selectedPlayers = selectedBasePlayers.filter((p) => p.rating >= 80);
   const normalizedTiers = normalizeTiers(tierConfig);
+
+  // A group needs at least 2 teams to have any fixtures; cap the picker at 4 groups for sanity.
+  const maxGroupOptions = React.useMemo(() => {
+    const maxGroups = Math.max(1, Math.min(4, Math.floor(count / 2)));
+    return Array.from({ length: maxGroups }, (_, i) => i + 1);
+  }, [count]);
+
+  React.useEffect(() => {
+    const maxAllowed = maxGroupOptions[maxGroupOptions.length - 1] || 1;
+    if (groupCount > maxAllowed) setGroupCount(maxAllowed);
+  }, [maxGroupOptions, groupCount]);
 
   // Fixed pool size: 26 per person
   const targetPoolSize = count * PLAYERS_PER_PERSON;
@@ -126,80 +137,6 @@ export function SetupScreen({ user, onStart }) {
       }
     });
   }
-
-  if (ready) return React.createElement("div", {
-    style:{ minHeight:"100vh", background:"#04060a", display:"flex", alignItems:"center", justifyContent:"center" }
-  },
-    React.createElement("div", { style:{ textAlign:"center", animation:"fadeUp .5s ease", padding:20 } },
-      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:60, color:"#FFD700", letterSpacing:5,
-        textShadow:"0 0 50px #FFD70055" } }, "DRAW CEREMONY"),
-      React.createElement("p", { style:{ fontFamily:"'Rajdhani'", fontSize:14, color:"#666", margin:"8px 0 28px", letterSpacing:2 } },
-        "Host will randomise lot order & first-pick sequence"),
-      React.createElement("div", { style:{ background:"#0d0f16", border:"1px solid #1e2230", borderRadius:12,
-        padding:"14px 22px", marginBottom:28, display:"inline-block" } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:3, marginBottom:8 } }, "PLAYER POOL"),
-        React.createElement("div", { style:{ display:"flex", gap:16, flexWrap:"wrap", justifyContent:"center" } },
-          Object.entries(normalizedTiers).map(([k,t]) =>
-            React.createElement("div", { key:k, style:{ textAlign:"center" } },
-              React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:t.color } }, tierStats[k]),
-              React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#555" } }, k)
-            )
-          ),
-          React.createElement("div", { style:{ textAlign:"center", borderLeft:"1px solid #1e2230", paddingLeft:16 } },
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:"#fff" } }, selectedPlayers.length),
-            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#555" } }, "TOTAL")
-          )
-        )
-      ),
-      React.createElement("div", null),
-      poolError && React.createElement("div", {
-        style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#FF3D71", marginBottom:10 }
-      }, poolError),
-      creatingRoom && React.createElement("div", {
-        style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#FFD700", marginBottom:10 }
-      }, "Creating room and persisting session..."),
-      React.createElement("button", { style:BTN.gold, onClick: async () => {
-        sfx("reveal");
-        setCreatingRoom(true);
-        setPoolError("");
-        const lotOrder = shuffleArray([1, 2, 3, 4, 5, 6]);
-        const lotAssignedPlayers = assignLotsToPlayers(selectedPlayers, normalizedTiers);
-        const shuffledPlayers = shuffleArray(lotAssignedPlayers).sort((a,b) => a.lot - b.lot);
-        const sequence = shuffleArray(names.slice(0, count));
-        const sessionId = `session:${Date.now()}`;
-        const newSessionData = {
-          name: sessionName,
-          host: user.username,
-          roomCode,
-          budgetPerBidder: budget,
-          participants: sequence.map(n => ({ name:n, budget:budget, squad:[] })),
-          lotOrder,
-          sequence,
-          shuffledPlayers,
-          playerPool: lotAssignedPlayers,
-          tiers: normalizedTiers,
-          lotIdx: 0,
-          lotOpen: false,
-          lotClosing: false,
-          passedThisLot: [],
-          turnIdx: 0,
-          status: "active",
-          createdAt: Date.now(),
-          id: sessionId,
-        };
-
-        try {
-          const persisted = await onStart(newSessionData, { deferNavigation: true });
-          setSessionData(persisted || newSessionData);
-          setShowShare(true);
-        } catch (err) {
-          setPoolError(err?.message || "Failed to create room. Please try again.");
-        } finally {
-          setCreatingRoom(false);
-        }
-      } }, creatingRoom ? "CREATING ROOM…" : "🎲 SPIN THE DRAW")
-    )
-  );
 
   return React.createElement("div", {
     style:{ minHeight:"100vh", background:"#04060a", display:"flex", alignItems:"center",
@@ -265,7 +202,7 @@ export function SetupScreen({ user, onStart }) {
         ),
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", fontFamily:"'Rajdhani'", fontSize:11, color:"#444", marginTop:5 } },
           React.createElement("div", null,
-            `${selectedPlayers.length} players · ~${Math.round(Math.max(selectedPlayers.length,1)/count)} per person · ${LOTS} lots`),
+            `${selectedPlayers.length} players · ~${Math.round(Math.max(selectedPlayers.length,1)/count)} per person · ${count} lots`),
           React.createElement("div", { style:{ color: poolHealthy ? "#00FF88" : "#FF6B35" } })
         )
       ),
@@ -281,14 +218,74 @@ export function SetupScreen({ user, onStart }) {
           React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:"#FFD700", letterSpacing:2 } }, "M")
         )
       ),
+      React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:`1px solid ${mysteryEnabled ? "#FFD70044" : "#1e2230"}`, borderRadius:10, padding:12 } },
+        React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center" } },
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#FFD700", letterSpacing:2, marginBottom:3 } }, "MYSTERY CARD"),
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666", maxWidth:300 } },
+              `Each bidder can spend ${MYSTERY_CARD_PRICE}M once to reveal a random S/S+ tier player, unique to them.`)
+          ),
+          React.createElement("button", {
+            type:"button",
+            onClick: () => setMysteryEnabled(v => !v),
+            style:{
+              width:52, height:28, borderRadius:14, border:"none", cursor:"pointer", position:"relative",
+              background: mysteryEnabled ? "#FFD700" : "#1e2230", flexShrink:0, transition:"background .2s"
+            }
+          },
+            React.createElement("span", { style:{
+              position:"absolute", top:3, left: mysteryEnabled ? 27 : 3, width:22, height:22, borderRadius:"50%",
+              background:"#04060a", transition:"left .2s"
+            } })
+          )
+        )
+      ),
+      React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:`1px solid ${groupsEnabled ? "#4FC3F744" : "#1e2230"}`, borderRadius:10, padding:12 } },
+        React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: groupsEnabled ? 10 : 0 } },
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#4FC3F7", letterSpacing:2, marginBottom:3 } }, "🏆 GROUP STAGE"),
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666", maxWidth:300 } },
+              "Split bidders into groups with randomised round-robin fixtures, played after the draft.")
+          ),
+          React.createElement("button", {
+            type:"button",
+            onClick: () => setGroupsEnabled(v => !v),
+            style:{
+              width:52, height:28, borderRadius:14, border:"none", cursor:"pointer", position:"relative",
+              background: groupsEnabled ? "#4FC3F7" : "#1e2230", flexShrink:0, transition:"background .2s"
+            }
+          },
+            React.createElement("span", { style:{
+              position:"absolute", top:3, left: groupsEnabled ? 27 : 3, width:22, height:22, borderRadius:"50%",
+              background:"#04060a", transition:"left .2s"
+            } })
+          )
+        ),
+        groupsEnabled && React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
+          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } }, "NUMBER OF GROUPS"),
+          React.createElement("div", { style:{ display:"flex", gap:5 } },
+            maxGroupOptions.map(n =>
+              React.createElement("button", { key:n, type:"button", onClick: () => setGroupCount(n), style:{
+                background: groupCount===n ? "#4FC3F7" : "#0d0f16",
+                color: groupCount===n ? "#000" : "#888",
+                border:`1px solid ${groupCount===n ? "#4FC3F7" : "#1e2028"}`,
+                borderRadius:6, padding:"4px 12px", cursor:"pointer",
+                fontFamily:"'Bebas Neue'", fontSize:13
+              }}, n===1 ? "SINGLE" : n)
+            )
+          ),
+          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#444" } },
+            `≈${Math.ceil(count / groupCount)} teams per group`)
+        )
+      ),
       React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:"1px solid #1e2230", borderRadius:10, padding:10 } },
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 } },
-          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:2 } }, "PLAYER POOL (79+ RATED)"),
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:2 } }, "PLAYER POOL (80+ RATED)"),
           React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
             React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#888" } }, `${selectedBasePlayers.length} selected`),
             React.createElement("button", {
               onClick: () => {
-                const allEligible = basePlayers.filter(p => p.rating >= 79);
+                const allEligible = basePlayers.filter(p => p.rating >= 80);
                 if (selectedBasePlayers.length === allEligible.length) {
                   // Deselect all
                   setExcludedIds(new Set(allEligible.map(p => p.id)));
@@ -299,7 +296,7 @@ export function SetupScreen({ user, onStart }) {
               },
               style:{ background:"#FFD70022", border:"1px solid #FFD70044", color:"#FFD700", borderRadius:6, padding:"3px 8px", 
                 cursor:"pointer", fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700 }
-            }, selectedBasePlayers.length === basePlayers.filter(p => p.rating >= 79).length ? "DESELECT ALL" : "SELECT ALL")
+            }, selectedBasePlayers.length === basePlayers.filter(p => p.rating >= 80).length ? "DESELECT ALL" : "SELECT ALL")
           )
         ),
         React.createElement("div", { style:{ display:"flex", gap:8, marginBottom:8, flexWrap:"wrap" } },
@@ -326,7 +323,7 @@ export function SetupScreen({ user, onStart }) {
             padding:"8px 10px", color:"#fff", fontFamily:"'Exo 2'", fontSize:12, marginBottom:8 }
         }),
         React.createElement("div", { style:{ maxHeight:240, overflowY:"auto", border:"1px solid #1a1c22", borderRadius:7, padding:6, marginBottom:8 } },
-          basePlayers.filter(p => p.rating >= 79 && (!search || p.name.toLowerCase().includes(search.toLowerCase()) || p.pos.toLowerCase().includes(search.toLowerCase())))
+          basePlayers.filter(p => p.rating >= 80 && (!search || p.name.toLowerCase().includes(search.toLowerCase()) || p.pos.toLowerCase().includes(search.toLowerCase())))
             .sort((a, b) => b.rating - a.rating)
             .map((p) => {
               const posGroup = Object.entries({GK:["GK"],DEF:["CB","LB","RB","LWB","RWB"],MID:["CDM","CM","CAM","LM","RM"],ATT:["ST","CF","LW","RW","SS"]}).find(([,positions]) => positions.includes(p.pos))?.[0] || "MID";
@@ -393,38 +390,26 @@ export function SetupScreen({ user, onStart }) {
 
           setCreatingRoom(true);
           setPoolError("");
-          const lotOrder = shuffleArray([1, 2, 3, 4, 5, 6]);
-          const lotAssignedPlayers = assignLotsToPlayers(selectedPlayers, normalizedTiers);
-          const shuffledPlayers = shuffleArray(lotAssignedPlayers).sort((a,b) => a.lot - b.lot);
-          const sequence = shuffleArray(names.slice(0, count));
           const sessionId = `session:${Date.now()}`;
-          const newSessionData = {
-            name: sessionName,
-            host: user.username,
-            roomCode,
-            budgetPerBidder: budget,
-            participants: sequence.map(n => ({ name:n, budget:budget, squad:[] })),
-            lotOrder,
-            sequence,
-            shuffledPlayers,
-            playerPool: lotAssignedPlayers,
-            tiers: normalizedTiers,
-            lotIdx: 0,
-            lotOpen: false,
-            lotClosing: false,
-            passedThisLot: [],
-            turnIdx: 0,
-            drawPhase: 0,
-            revealedLotCount: 0,
-            revealedPickCount: 0,
-            status: "draw",
-            createdAt: Date.now(),
+          // Only the auction *spec* is built here — which players/options to use. Lot
+          // assignment, draw order, pick order, and Mystery Card pools/candidates are all
+          // generated server-side so the host has exactly zero foresight, same as everyone else.
+          const roomSpec = {
             id: sessionId,
+            roomCode,
+            name: sessionName,
+            budgetPerBidder: budget,
+            tiers: normalizedTiers,
+            selectedPlayers,
+            participantNames: names.slice(0, count),
+            mysteryEnabled,
+            groupsEnabled,
+            groupCount,
           };
 
           try {
-            const persisted = await onStart(newSessionData, { deferNavigation: true });
-            setSessionData(persisted || newSessionData);
+            const persisted = await onStart(roomSpec, { deferNavigation: true });
+            setSessionData(persisted);
             setShowShare(true);
           } catch (err) {
             setPoolError(err?.message || "Failed to create room. Please try again.");

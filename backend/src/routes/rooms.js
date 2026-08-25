@@ -5,10 +5,44 @@ import { normalizeFirebaseError } from "../services/firebaseErrors.js";
 import { getFirebase } from "../services/firebaseService.js";
 import { persistCompletedSessionResult } from "../services/sessionPersistence.js";
 import { emitSessionClosed, emitSessionUpdate } from "../services/realtime.js";
+import { rerollMysteryCandidates } from "../services/mysteryCard.js";
+import { generateAuctionSetup } from "../services/gameSetup.js";
+import { isSessionParticipant, sanitizeRoomPreview, sanitizeSessionForViewer } from "../services/sessionView.js";
 
 const router = Router();
 
 const roomCodeSchema = z.string().min(4).max(12);
+
+const tierSchema = z.object({
+  min: z.number(),
+  max: z.number(),
+  price: z.number(),
+  color: z.string(),
+  bg: z.string(),
+  border: z.string(),
+});
+
+// What the host's browser is allowed to hand over when creating a room: which players and
+// options to use. Everything secret (lot assignment, draw order, pick order, Mystery Card
+// pools/candidates, groups/fixtures) is generated server-side from this spec — the host never
+// computes or sees any of it themselves, same as every other participant.
+const roomSpecSchema = z.object({
+  id: z.string().min(1),
+  roomCode: roomCodeSchema,
+  name: z.string().min(1).max(120),
+  budgetPerBidder: z.number().positive(),
+  tiers: z.record(tierSchema),
+  selectedPlayers: z.array(z.object({
+    id: z.number(),
+    name: z.string().optional(),
+    rating: z.number(),
+    pos: z.string(),
+  })).min(1),
+  participantNames: z.array(z.string().min(1)).min(2),
+  mysteryEnabled: z.boolean().optional(),
+  groupsEnabled: z.boolean().optional(),
+  groupCount: z.number().optional(),
+});
 
 function isPlaceholderName(name) {
   return /^player\s+\d+$/i.test(String(name || "").trim());
@@ -38,6 +72,38 @@ function withParticipantNames(session) {
   };
 }
 
+function renameMysteryKey(map, oldName, newName) {
+  if (!map || typeof map !== "object" || !(oldName in map) || oldName === newName) return map;
+  const next = { ...map };
+  next[newName] = next[oldName];
+  delete next[oldName];
+  return next;
+}
+
+function renameInGroups(groups, oldName, newName) {
+  if (!groups || typeof groups !== "object" || oldName === newName) return groups;
+  const next = {};
+  Object.entries(groups).forEach(([label, members]) => {
+    next[label] = Array.isArray(members) ? members.map((m) => (m === oldName ? newName : m)) : members;
+  });
+  return next;
+}
+
+function renameInFixtures(fixtures, oldName, newName) {
+  if (!fixtures || typeof fixtures !== "object" || oldName === newName) return fixtures;
+  const next = {};
+  Object.entries(fixtures).forEach(([label, games]) => {
+    next[label] = Array.isArray(games)
+      ? games.map((g) => ({
+          ...g,
+          home: g.home === oldName ? newName : g.home,
+          away: g.away === oldName ? newName : g.away,
+        }))
+      : games;
+  });
+  return next;
+}
+
 function sanitizePlayerRef(player, { includeName = false } = {}) {
   const ref = {};
 
@@ -46,8 +112,10 @@ function sanitizePlayerRef(player, { includeName = false } = {}) {
     ref.id = id;
   }
 
+  // Lot count now scales with participant count (one lot per bidder), so there's no fixed
+  // upper bound anymore — just guard against nonsensical values.
   const lot = Number(player?.lot);
-  if (Number.isFinite(lot) && lot >= 1 && lot <= 6) {
+  if (Number.isFinite(lot) && lot >= 1 && lot <= 100) {
     ref.lot = lot;
   }
 
@@ -83,51 +151,84 @@ async function cleanupLiveSession(db, session) {
 
 router.post("/rooms", requireUserAuth, async (req, res) => {
   try {
-    const session = req.body?.session;
-    if (!session?.id || !session?.roomCode) {
-      return res.status(400).json({ error: "session.id and session.roomCode are required" });
-    }
+    const spec = roomSpecSchema.parse(req.body?.spec);
+    const host = String(req.user?.username || "").trim();
+    if (!host) return res.status(400).json({ error: "Invalid user" });
+
+    const roomCode = spec.roomCode.toUpperCase();
+    const groupCount = Math.max(1, Math.floor(Number(spec.groupCount) || 1));
+
+    // Every random/secret piece of the auction is generated here, server-side, from the spec —
+    // the host's browser never computes (and is never shown) the lot assignment, draw order,
+    // pick sequence, or Mystery Card pools/candidates. They receive exactly the same
+    // zero-information "draw phase" view as everyone else once this is stored.
+    const setup = generateAuctionSetup({
+      selectedPlayers: spec.selectedPlayers,
+      tiers: spec.tiers,
+      participantNames: spec.participantNames,
+      mysteryEnabled: Boolean(spec.mysteryEnabled),
+      groupsEnabled: Boolean(spec.groupsEnabled),
+      groupCount,
+    });
 
     const { db } = getFirebase();
-    const roomCode = String(session.roomCode).toUpperCase();
-    
-    // Optimize session data for Firestore storage (avoid 1MB document limit)
-    // Store only essential data and player references, not full objects
-    const optimizedSession = {
-      ...session,
+    const now = Date.now();
+    const session = {
+      id: spec.id,
+      name: spec.name,
+      host,
       roomCode,
-      // Store only player IDs and lot assignments, strip full player objects
-      playerPool: sanitizePlayerList(session.playerPool, { includeName: true }),
-      shuffledPlayers: sanitizePlayerList(session.shuffledPlayers, { includeName: true }),
-      participantNames: Array.isArray(session?.participants)
-        ? session.participants
-            .map((p) => String(p?.name || "").trim())
-            .filter(Boolean)
-        : [],
-      updatedAt: Date.now(),
+      budgetPerBidder: spec.budgetPerBidder,
+      participants: setup.sequence.map((n) => ({ name: n, budget: spec.budgetPerBidder, squad: [] })),
+      lotOrder: setup.lotOrder,
+      sequence: setup.sequence,
+      // Store only player IDs/lot/name, not full stat objects (those are hydrated client-side
+      // from the public CSV once a lot is actually visible to a given viewer).
+      playerPool: sanitizePlayerList(setup.playerPool, { includeName: true }),
+      shuffledPlayers: sanitizePlayerList(setup.shuffledPlayers, { includeName: true }),
+      tiers: spec.tiers,
+      lotIdx: 0,
+      lotOpen: false,
+      lotClosing: false,
+      passedThisLot: [],
+      turnIdx: 0,
+      drawPhase: 0,
+      revealedLotCount: 0,
+      revealedPickCount: 0,
+      mysteryEnabled: Boolean(spec.mysteryEnabled),
+      mysteryPools: setup.mysteryPools,
+      mysteryCurrent: setup.mysteryCurrent,
+      mysteryUsed: {},
+      groupsEnabled: Boolean(spec.groupsEnabled),
+      groupCount,
+      groups: setup.groups,
+      fixtures: setup.fixtures,
+      participantNames: setup.sequence.slice(),
+      status: "draw",
+      createdAt: now,
+      updatedAt: now,
     };
 
     // Check document size before storing
-    const docSize = JSON.stringify(optimizedSession).length;
+    const docSize = JSON.stringify(session).length;
     if (docSize > 900000) { // Leave 100KB buffer below 1MB
-      return res.status(400).json({ 
-        error: "Session data too large. Please reduce player pool size." 
+      return res.status(400).json({
+        error: "Session data too large. Please reduce player pool size."
       });
     }
 
-    await db.collection("sessions").doc(String(session.id)).set(optimizedSession, { merge: true });
-    await db.collection("rooms").doc(roomCode).set({ sessionId: String(session.id), roomCode, updatedAt: Date.now() }, { merge: true });
-    await persistCompletedSessionResult(db, optimizedSession);
-    emitSessionUpdate(optimizedSession);
+    await db.collection("sessions").doc(String(session.id)).set(session, { merge: true });
+    await db.collection("rooms").doc(roomCode).set({ sessionId: String(session.id), roomCode, updatedAt: now }, { merge: true });
+    emitSessionUpdate(session);
 
-    return res.status(201).json({ session: optimizedSession });
+    return res.status(201).json({ session: sanitizeSessionForViewer(session, host) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to create room", 500);
     return res.status(normalized.status).json({ error: normalized.error });
   }
 });
 
-router.get("/rooms/:roomCode", async (req, res) => {
+router.get("/rooms/:roomCode", requireUserAuth, async (req, res) => {
   try {
     const roomCode = roomCodeSchema.parse(String(req.params.roomCode || "").toUpperCase());
     const { db } = getFirebase();
@@ -142,7 +243,9 @@ router.get("/rooms/:roomCode", async (req, res) => {
       return res.status(404).json({ error: "Session not found" });
     }
 
-    return res.json({ session: sessionDoc.data() });
+    // This endpoint is only ever used to check a room's existence/status *before* joining, so it
+    // never needs to (and must not) reveal any player, lot, or Mystery Card data.
+    return res.json({ session: sanitizeRoomPreview(sessionDoc.data()) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to fetch room", 400);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -154,6 +257,14 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
     const roomCode = roomCodeSchema.parse(String(req.params.roomCode || "").toUpperCase());
     const username = String(req.body?.username || "").trim();
     if (!username) return res.status(400).json({ error: "username is required" });
+
+    // A caller must only ever be able to join/act as their own authenticated identity — otherwise
+    // anyone could pass someone else's name in the body and read that participant's session view
+    // (including their Mystery Card candidate) without ever proving they own that account.
+    const authUsername = String(req.user?.username || "").trim();
+    if (!authUsername || authUsername.toLowerCase() !== username.toLowerCase()) {
+      return res.status(403).json({ error: "You can only join a room as your own account" });
+    }
 
     const { db } = getFirebase();
     const roomDoc = await db.collection("rooms").doc(roomCode).get();
@@ -173,7 +284,7 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
     const exactIdx = participants.findIndex((p) => p.name === username);
     if (exactIdx >= 0) {
       emitSessionUpdate(session);
-      return res.json({ session });
+      return res.json({ session: sanitizeSessionForViewer(session, username) });
     }
 
     const caseInsensitiveIdx = participants.findIndex(
@@ -186,10 +297,14 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         ...session,
         participants,
         sequence: replaceNameInSequence(session.sequence, previousName, username),
+        mysteryPools: renameMysteryKey(session.mysteryPools, previousName, username),
+        mysteryCurrent: renameMysteryKey(session.mysteryCurrent, previousName, username),
+        groups: renameInGroups(session.groups, previousName, username),
+        fixtures: renameInFixtures(session.fixtures, previousName, username),
       });
       await sessionRef.set(normalized, { merge: true });
       emitSessionUpdate(normalized);
-      return res.json({ session: normalized });
+      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
     }
 
     const placeholderIdx = participants.findIndex((p) => isPlaceholderName(p?.name));
@@ -200,10 +315,14 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         ...session,
         participants,
         sequence: replaceNameInSequence(session.sequence, previousName, username),
+        mysteryPools: renameMysteryKey(session.mysteryPools, previousName, username),
+        mysteryCurrent: renameMysteryKey(session.mysteryCurrent, previousName, username),
+        groups: renameInGroups(session.groups, previousName, username),
+        fixtures: renameInFixtures(session.fixtures, previousName, username),
       });
       await sessionRef.set(normalized, { merge: true });
       emitSessionUpdate(normalized);
-      return res.json({ session: normalized });
+      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
     }
 
     // Host should always be able to rejoin a room they created, even if their participant entry is missing.
@@ -220,7 +339,7 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
       });
       await sessionRef.set(normalized, { merge: true });
       emitSessionUpdate(normalized);
-      return res.json({ session: normalized });
+      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
     }
 
     const expectedNames = participants.map((p) => p.name).join(", ");
@@ -235,8 +354,11 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
 
 router.get("/sessions", requireUserAuth, async (req, res) => {
   try {
-    const username = String(req.query.username || "").trim();
-    if (!username) return res.status(400).json({ error: "username query param is required" });
+    // Always use the authenticated identity — never trust a client-supplied query param, which
+    // would otherwise let any logged-in user read another user's session list (and, since each
+    // session is now filtered per-viewer, their Mystery Card data too).
+    const username = String(req.user?.username || "").trim();
+    if (!username) return res.status(400).json({ error: "Invalid user" });
 
     const { db } = getFirebase();
     const byHostSnap = await db.collection("sessions").where("host", "==", username).get();
@@ -246,7 +368,9 @@ router.get("/sessions", requireUserAuth, async (req, res) => {
     byHostSnap.docs.forEach((d) => map.set(d.id, d.data()));
     byParticipantSnap.docs.forEach((d) => map.set(d.id, d.data()));
 
-    const sessions = Array.from(map.values()).sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+    const sessions = Array.from(map.values())
+      .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
+      .map((s) => sanitizeSessionForViewer(s, username));
     return res.json({ sessions });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to list sessions", 500);
@@ -254,12 +378,19 @@ router.get("/sessions", requireUserAuth, async (req, res) => {
   }
 });
 
-router.get("/sessions/:id", async (req, res) => {
+router.get("/sessions/:id", requireUserAuth, async (req, res) => {
   try {
     const { db } = getFirebase();
     const snap = await db.collection("sessions").doc(String(req.params.id)).get();
     if (!snap.exists) return res.status(404).json({ error: "Session not found" });
-    return res.json({ session: snap.data() });
+
+    const session = snap.data();
+    const username = String(req.user?.username || "").trim();
+    if (!isSessionParticipant(session, username)) {
+      return res.status(403).json({ error: "You are not part of this session" });
+    }
+
+    return res.json({ session: sanitizeSessionForViewer(session, username) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to fetch session", 500);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -272,18 +403,105 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
     if (!session || !session.id) return res.status(400).json({ error: "session payload is required" });
 
     const { db } = getFirebase();
-    
-    // Optimize session data to avoid Firestore document size limits
+    const sessionRef = db.collection("sessions").doc(String(req.params.id));
+    const existingSnap = await sessionRef.get();
+    if (!existingSnap.exists) return res.status(404).json({ error: "Session not found" });
+
+    const existing = existingSnap.data();
+    const username = String(req.user?.username || "").trim();
+    if (!isSessionParticipant(existing, username)) {
+      return res.status(403).json({ error: "You are not part of this session" });
+    }
+
+    // playerPool / shuffledPlayers / mysteryPools are server-owned from the moment the room is
+    // created onward: a client is never allowed to overwrite them (this is what previously let
+    // any participant's browser push — and therefore see — the full, unfiltered pool for every
+    // lot, opened or not). Only the lot/turn/participant bookkeeping fields come from the client.
+    const mergedLotIdx = Number(session.lotIdx ?? existing.lotIdx ?? 0);
+    const existingLotIdx = Number(existing.lotIdx ?? 0);
+    const mergedStatus = session.status || existing.status;
+    const mergedMysteryUsed = session.mysteryUsed && typeof session.mysteryUsed === "object"
+      ? session.mysteryUsed
+      : (existing.mysteryUsed || {});
+
+    // Mystery Card candidates are re-rolled on lot transition, and also refreshed whenever a
+    // participant's own current candidate has been picked by them (deduplication: same user
+    // cannot get the same player via regular pick AND mystery card).
+    let mysteryCurrent = (existing.mysteryEnabled && mergedStatus === "active" && mergedLotIdx !== existingLotIdx)
+      ? rerollMysteryCandidates(existing.mysteryPools || {}, mergedMysteryUsed)
+      : { ...(existing.mysteryCurrent || {}) };
+
+    if (existing.mysteryEnabled) {
+      const newParticipants = Array.isArray(session.participants) ? session.participants : [];
+      newParticipants.forEach((p) => {
+        if (mergedMysteryUsed[p.name]) return; // already used card
+        const candidateId = mysteryCurrent[p.name];
+        if (candidateId == null) return;
+        const ownedIds = new Set((p.squad || []).map((pl) => Number(pl.id)));
+        if (ownedIds.has(Number(candidateId))) {
+          // Their candidate was just picked by them — pick a new one excluding all their squad
+          const pool = (existing.mysteryPools?.[p.name] || []).filter(
+            (id) => !ownedIds.has(Number(id))
+          );
+          if (pool.length > 0) {
+            mysteryCurrent[p.name] = pool[Math.floor(Math.random() * pool.length)];
+          } else {
+            delete mysteryCurrent[p.name];
+          }
+        }
+      });
+    }
+
+    // lotOrder never changes after creation — it's server-generated once and reused for the
+    // whole game, so no client input for it is ever trusted, at any status.
+    const lotOrder = existing.lotOrder || [];
+
+    // sequence (pick/turn order) is different: during the draw ceremony it's the same kind of
+    // secret as lotOrder (must not be readable before its reveal step), but once bidding is
+    // active it becomes legitimate, client-driven gameplay state (rotated every lot). So it's
+    // only locked to the server's stored copy while still in the draw phase.
+    const sequence = mergedStatus === "draw"
+      ? (existing.sequence || [])
+      : (Array.isArray(session.sequence) ? session.sequence : (existing.sequence || []));
+
+    // The draw ceremony reveals one extra lot/pick at a time for suspense — clamp both counters
+    // so a crafted request can't jump straight to "everything revealed" instead of stepping
+    // through it, which would otherwise hand back the *entire* secret array in one response.
+    const totalToReveal = (Array.isArray(existing.participants) ? existing.participants.length : 0)
+      || lotOrder.length;
+    const existingRevealedLotCount = Number(existing.revealedLotCount || 0);
+    const revealedLotCount = Math.max(0, Math.min(
+      Number(session.revealedLotCount ?? existingRevealedLotCount) || 0,
+      existingRevealedLotCount + 1,
+      totalToReveal
+    ));
+    const existingRevealedPickCount = Number(existing.revealedPickCount || 0);
+    const revealedPickCount = Math.max(0, Math.min(
+      Number(session.revealedPickCount ?? existingRevealedPickCount) || 0,
+      existingRevealedPickCount + 1,
+      totalToReveal
+    ));
+
     const optimizedSession = {
+      ...existing,
       ...session,
-      // Store only player references (IDs and lot), not full objects
-      playerPool: sanitizePlayerList(session.playerPool, { includeName: true }),
-      shuffledPlayers: sanitizePlayerList(session.shuffledPlayers, { includeName: true }),
+      id: existing.id,
+      roomCode: existing.roomCode,
+      playerPool: existing.playerPool || [],
+      shuffledPlayers: existing.shuffledPlayers || [],
+      lotOrder,
+      sequence,
+      revealedLotCount,
+      revealedPickCount,
+      mysteryEnabled: Boolean(existing.mysteryEnabled),
+      mysteryPools: existing.mysteryPools || {},
+      mysteryUsed: mergedMysteryUsed,
+      mysteryCurrent,
       participantNames: Array.isArray(session?.participants)
         ? session.participants
             .map((p) => String(p?.name || "").trim())
             .filter(Boolean)
-        : [],
+        : (existing.participantNames || []),
       updatedAt: Date.now(),
     };
 
@@ -300,7 +518,7 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
       return res.status(204).send();
     }
 
-    await db.collection("sessions").doc(String(req.params.id)).set(optimizedSession, { merge: true });
+    await sessionRef.set(optimizedSession, { merge: true });
     emitSessionUpdate(optimizedSession);
     return res.status(204).send();
   } catch (err) {
@@ -337,7 +555,7 @@ router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
       });
       emitSessionClosed(normalized, "cancelled");
       await cleanupLiveSession(db, normalized);
-      return res.json({ session: normalized });
+      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
     }
 
     const participants = Array.isArray(session.participants) ? session.participants : [];
@@ -366,8 +584,8 @@ router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
     });
 
     await sessionRef.set(normalized, { merge: true });
-  emitSessionUpdate(normalized);
-    return res.json({ session: normalized });
+    emitSessionUpdate(normalized);
+    return res.json({ session: sanitizeSessionForViewer(normalized, username) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to abandon session", 500);
     return res.status(normalized.status).json({ error: normalized.error });

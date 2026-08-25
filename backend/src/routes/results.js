@@ -26,6 +26,19 @@ router.get("/results", requireUserAuth, async (req, res) => {
   }
 });
 
+router.get("/results/:auctionResultId/fixtures", requireUserAuth, async (req, res) => {
+  try {
+    const { auctionResultId } = req.params;
+    const { db } = getFirebase();
+    const snap = await db.collection("auctionResults").doc(auctionResultId).get();
+    if (!snap.exists) return res.status(404).json({ error: "Result not found" });
+    return res.json({ fixtures: snap.data()?.fixtures || {} });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to fetch fixtures", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
 // Save points for players in an auction
 router.post("/results/:auctionResultId/points", requireUserAuth, async (req, res) => {
   try {
@@ -163,6 +176,29 @@ router.get("/results/:auctionResultId/points", requireUserAuth, async (req, res)
     return res.json({ points });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to fetch points", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
+// Save/update the group-stage fixtures (with goals) for a completed auction
+router.put("/results/:auctionResultId/fixtures", requireUserAuth, async (req, res) => {
+  try {
+    const { auctionResultId } = req.params;
+    const { fixtures } = req.body || {};
+
+    if (!auctionResultId || !fixtures || typeof fixtures !== "object" || Array.isArray(fixtures)) {
+      return res.status(400).json({ error: "auctionResultId and a fixtures object are required" });
+    }
+
+    const { db } = getFirebase();
+    await db.collection("auctionResults").doc(auctionResultId).set({
+      fixtures,
+      updatedAt: Date.now(),
+    }, { merge: true });
+
+    return res.json({ success: true });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to save fixtures", 500);
     return res.status(normalized.status).json({ error: normalized.error });
   }
 });

@@ -3,13 +3,15 @@ import { Toast } from "../components/Toast.jsx";
 import { PlayerRow } from "../components/PlayerRow.jsx";
 import { loadPlayersFromCsv } from "../data/csvPlayerLoader.js";
 import { BudgetSidebar } from "../components/BudgetSidebar.jsx";
+import { MysteryCard, MysteryScratchModal } from "../components/MysteryCard.jsx";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
-import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, LOTS, getTierData, getTierKey } from "../game/constants.js";
+import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, LOTS, MYSTERY_CARD_PRICE, getTierData, getTierKey } from "../game/constants.js";
 import { apiAbandonSession, apiGetSession, apiUpdateSession } from "../lib/api.js";
 import { subscribeToSessionStream } from "../lib/realtime.js";
 import { rotateArray } from "../utils/random.js";
+import { trackEvent } from "../lib/analytics.js";
 
 export function BiddingScreen({ session: initSession, user, wishlists, onWishlist, onEnd, onAbandon }) {
   const baseSessionRef = React.useRef(initSession);
@@ -36,10 +38,16 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [actionKind, setActionKind] = React.useState("idle");
   const [showWaitingOverlayDebounced, setShowWaitingOverlayDebounced] = React.useState(false);
   const [roomCode, setRoomCode] = React.useState(initSession.roomCode || "");
+  const [mysteryEnabled, setMysteryEnabled] = React.useState(Boolean(initSession.mysteryEnabled));
+  const [mysteryCurrent, setMysteryCurrent] = React.useState(initSession.mysteryCurrent || {});
+  const [mysteryUsed, setMysteryUsed] = React.useState(initSession.mysteryUsed || {});
+  const [mysteryModalOpen, setMysteryModalOpen] = React.useState(false);
+  const [mysteryDisclaimerOpen, setMysteryDisclaimerOpen] = React.useState(false);
   const lastPickEventRef = React.useRef(initSession.lastPickEvent?.id || null);
   const syncNowRef = React.useRef(() => {});
   const lastAutoSkippedRef = React.useRef(null);
   const saveSessionRef = React.useRef(null);
+
 
   // Load face URL map from CSV so images show for all users regardless of what's in Firestore
   React.useEffect(() => {
@@ -88,7 +96,8 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const normalizeLotValue = (lot) => {
     const numeric = Number(lot);
-    if (!Number.isFinite(numeric) || numeric < 1 || numeric > LOTS) {
+    const totalLots = lotOrder.length || LOTS;
+    if (!Number.isFinite(numeric) || numeric < 1 || numeric > totalLots) {
       return null;
     }
     return Math.floor(numeric);
@@ -96,6 +105,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const normalizePlayersLot = (players) => {
     if (!Array.isArray(players)) return [];
+    const totalLots = lotOrder.length || LOTS;
 
     // if at least one player has a valid lot, keep as-is, otherwise fallback assign evenly by index.
     const hasValidLot = players.some((p) => normalizeLotValue(p.lot) !== null);
@@ -108,7 +118,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
     return players.map((player, index) => ({
       ...player,
-      lot: (index % LOTS) + 1,
+      lot: (index % totalLots) + 1,
     }));
   };
 
@@ -138,6 +148,23 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     || participants.find((p) => p.name === currentPickerKey)
     || null;
   const userCanAct = Boolean(currentPickerName && currentPickerName === user.username);
+
+  // Mystery Card is independent of whose turn it is — it always applies to the logged-in user's own squad.
+  const myParticipant = participants.find((p) => p.name === user.username) || null;
+  const myMysteryUsed = Boolean(mysteryUsed?.[user.username]);
+  const myMysteryCandidateId = mysteryCurrent?.[user.username];
+  const myMysteryCandidate = myMysteryCandidateId != null
+    ? (playerDataMap.get(myMysteryCandidateId) || activePlayers.find((p) => p.id === myMysteryCandidateId) || null)
+    : null;
+  // The backend never sends anyone's Mystery Card pool contents to any client — the server tells
+  // us whether we have a candidate available at all (mysteryCurrent[user.username]), that's all
+  // a client should ever know or need to know.
+  const myMysteryAffordable = Boolean(myParticipant) && Number(myParticipant.budget || 0) >= MYSTERY_CARD_PRICE;
+  const myMysterySquadHasRoom = Boolean(myParticipant) && myParticipant.squad.length < SQUAD_MAX;
+  const mysteryAvailable = Boolean(
+    mysteryEnabled && !myMysteryUsed && myMysteryCandidate
+    && myMysteryAffordable && myMysterySquadHasRoom
+  );
 
   const showToast = (msg, color="#FFD700") => {
     setToast({ msg, color });
@@ -180,11 +207,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       lotClosing: nextLotClosing,
       sequence: nextSequence,
       lotOrder: nextLotOrder,
-      playerPool: activePlayers,
-      shuffledPlayers: activePlayers,
       tiers: activeTiers,
       passedThisLot: [...newPassed],
       status,
+      mysteryUsed,
       updatedAt: Date.now(),
       ...extras,
     };
@@ -197,7 +223,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       showToast("Sync failed. Retrying…", "#FF6B35");
       return false;
     }
-  }, [initSession, lotOpen, lotClosing, user?.token, sequence, lotOrder, activePlayers, activeTiers]);
+  }, [initSession, lotOpen, lotClosing, user?.token, sequence, lotOrder, activePlayers, activeTiers, mysteryUsed]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -223,12 +249,19 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       setActivePlayers(normalizePlayersLot(hydratePlayers(latest.shuffledPlayers || latest.playerPool || [])));
       setActiveTiers(latest.tiers || TIERS);
       setRoomCode(latest.roomCode || "");
+      setMysteryEnabled(Boolean(latest.mysteryEnabled));
+      setMysteryCurrent(latest.mysteryCurrent || {});
+      setMysteryUsed(latest.mysteryUsed || {});
 
       const latestPickEventId = latest.lastPickEvent?.id || null;
       if (latestPickEventId && latestPickEventId !== lastPickEventRef.current) {
         lastPickEventRef.current = latestPickEventId;
         if (latest.lastPickEvent?.picker && latest.lastPickEvent?.playerName) {
-          showToast(`⚽ ${latest.lastPickEvent.picker} picked ${latest.lastPickEvent.playerName}!`, "#00FF88");
+          if (latest.lastPickEvent?.viaMystery) {
+            showToast(`🎴 ${latest.lastPickEvent.picker} revealed ${latest.lastPickEvent.playerName} via Mystery Card!`, "#FFD700");
+          } else {
+            showToast(`⚽ ${latest.lastPickEvent.picker} picked ${latest.lastPickEvent.playerName}!`, "#00FF88");
+          }
         }
       }
 
@@ -258,7 +291,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
       let latest = null;
       try {
-        latest = await apiGetSession(initSession.id);
+        latest = await apiGetSession(initSession.id, user?.token);
       } catch (err) {
         // If session was deleted (404 / "not found") the host ended or cancelled the game
         const msg = String(err?.message || "").toLowerCase();
@@ -316,7 +349,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       onReconnect: () => {
         syncNowRef.current?.();
       },
-    });
+    }, user.username);
 
     syncSession(true);
 
@@ -331,14 +364,14 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         document.removeEventListener("visibilitychange", onVisibility);
       }
     };
-  }, [initSession.id, onEnd, onAbandon, hydratePlayers]);
+  }, [initSession.id, onEnd, onAbandon, hydratePlayers, user.username, user?.token]);
 
   // Always keep saveSessionRef pointing at the latest saveSession closure
   React.useEffect(() => { saveSessionRef.current = saveSession; });
 
   // Auto-skip any picker who cannot afford any available player or whose squad is full
   React.useEffect(() => {
-    if (!lotOpen || lotClosing || !currentPickerKey) return;
+    if (!lotOpen || lotClosing || !currentPickerKey || actionPending) return;
 
     // If this lot has no active target players (invalid assignment), and game still live,
     // we recover instead of repeatedly auto-skipping everyone.
@@ -389,7 +422,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     if (isHost) {
       saveSessionRef.current?.(participants, lotIdx, newTurnIdx, newPassed, "active", true, false, {}, sequence, lotOrder);
     }
-  }, [lotOpen, lotClosing, currentPickerKey, lotIdx, lotPlayers, activePlayers, currentParticipant, passedThisLot, participants, turnIdx, sequence, lotOrder, activeTiers]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lotOpen, lotClosing, currentPickerKey, lotIdx, lotPlayers, activePlayers, currentParticipant, passedThisLot, participants, turnIdx, sequence, lotOrder, activeTiers, actionPending]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const closeLot = () => setLotClosing(true);
 
@@ -401,6 +434,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       setLotOpen(true);
       setLotClosing(false);
       await saveSession(participants, lotIdx, turnIdx, passedThisLot, "active", true, false);
+      trackEvent("lot_opened", { lotNum: currentLotNum, lotIdx });
       showToast(`🔓 Lot ${currentLotNum} is now open!`, "#FFD700");
     } finally {
       endActionLock();
@@ -414,10 +448,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     if (!part) return;
     const td = getTierData(player.rating, activeTiers);
     if (part.budget < td.price) { showToast("❌ Not enough budget!", "#FF3D71"); return; }
-    if (part.squad.length >= SQUAD_MAX) { showToast("❌ Squad full (max 17)!", "#FF3D71"); return; }
+    if (part.squad.length >= SQUAD_MAX) { showToast("❌ Squad full (max 16)!", "#FF3D71"); return; }
     if (!beginActionLock(`Registering pick: ${player.name}`, "pick")) return;
 
     sfx("pick");
+    trackEvent("player_picked", { lotNum: currentLotNum, price: td.price, tier: getTierKey(player.rating, activeTiers) });
 
     const pickedAt = Date.now();
     const pickedPlayer = { ...player, pickedAt };
@@ -462,6 +497,52 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     }
   };
 
+  // Shows the disclaimer first; then the scratch-card modal after the user accepts.
+  const handleOpenMysteryCard = () => {
+    if (!mysteryAvailable || actionPending) return;
+    sfx("open");
+    setMysteryDisclaimerOpen(true);
+  };
+
+  const handleConfirmMysteryReveal = async () => {
+    if (!myParticipant || !myMysteryCandidate) { setMysteryModalOpen(false); return; }
+    if (myMysteryUsed || !mysteryAvailable) { setMysteryModalOpen(false); return; }
+    if (!beginActionLock(`Revealing Mystery Card: ${myMysteryCandidate.name}`, "mystery")) return;
+
+    sfx("pick");
+    trackEvent("mystery_card_used", { lotIdx });
+    const revealedPlayer = { ...myMysteryCandidate, viaMystery: true };
+
+    const updatedParticipants = participants.map((x) => x.name === myParticipant.name
+      ? { ...x, budget: x.budget - MYSTERY_CARD_PRICE, squad: [...x.squad, revealedPlayer] }
+      : x
+    );
+    const newMysteryUsed = { ...mysteryUsed, [user.username]: true };
+
+    setParticipants(updatedParticipants);
+    setMysteryUsed(newMysteryUsed);
+    showToast(`🎴 ${myParticipant.name} scratched the Mystery Card and revealed ${revealedPlayer.name}!`, "#FFD700");
+
+    const pickEvent = {
+      id: `mystery-${Date.now()}-${revealedPlayer.id}`,
+      picker: myParticipant.name,
+      playerId: revealedPlayer.id,
+      playerName: revealedPlayer.name,
+      viaMystery: true,
+      at: Date.now(),
+    };
+    lastPickEventRef.current = pickEvent.id;
+
+    try {
+      await saveSession(updatedParticipants, lotIdx, turnIdx, passedThisLot, "active", lotOpen, lotClosing, {
+        mysteryUsed: newMysteryUsed,
+        lastPickEvent: pickEvent,
+      }, sequence, lotOrder);
+    } finally {
+      endActionLock();
+    }
+  };
+
   const handleAbandonClick = async () => {
     try {
       await apiAbandonSession(initSession.id, user?.token);
@@ -474,6 +555,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     if (!currentPickerKey) return;
     if (!beginActionLock("Registering pass…", "pass")) return;
     sfx("pass");
+    trackEvent("bid_passed", { lotIdx });
     const newPassed = new Set([...passedThisLot, currentPickerKey]);
     setPassedThisLot(newPassed);
     showToast(`${currentPickerName} is done for this lot`, "#888");
@@ -500,11 +582,13 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     const rotated = rotateArray(sequence, 1);
     try {
       if (lotIdx + 1 >= lotOrder.length) {
+        trackEvent("auction_finalized", { lotCount: lotOrder.length });
         await saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
         onEnd(participants);
       } else {
         sfx("open");
         const newLotIdx = lotIdx + 1;
+        trackEvent("lot_advanced", { newLotIdx });
         setLotIdx(newLotIdx);
         setSequence(rotated);
         setPassedThisLot(new Set());
@@ -513,6 +597,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         setLotOpen(false);
         setSearch("");
         setGroupFilter("ALL");
+        // The backend owns Mystery Card pools and recomputes mysteryCurrent itself whenever
+        // lotIdx changes — the client never has the pool data needed to do this anymore, so we
+        // just let the server-side reroll happen and pick up the result on the next sync.
         await saveSession(participants, newLotIdx, 0, new Set(), "active", false, false, {}, rotated, lotOrder);
       }
     } finally {
@@ -552,17 +639,17 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     };
   }, [showWaitingOverlay]);
 
-  // Check whether any participant can still buy in any future lot
+  // Check whether any participant can still buy in any future lot.
+  // Future-lot players are intentionally stripped from the client payload by the server (fairness),
+  // so we cannot inspect their actual contents. Instead we check the weaker but sufficient condition:
+  // future lots exist AND at least one participant has enough budget for the cheapest tier.
   const futureLotNums = lotOrder.slice(lotIdx + 1);
-  const canAnyoneBuyInFuture = futureLotNums.some(lotNum => {
-    const lotAvail = activePlayers.filter(p => p.lot === lotNum && !ownedIds.has(p.id));
-    return lotAvail.some(pl => {
-      const price = Number(getTierData(pl.rating, activeTiers)?.price || 0);
-      return participants.some(entry => {
-        const squadSize = Array.isArray(entry?.squad) ? entry.squad.length : 0;
-        return squadSize < SQUAD_MAX && Number(entry?.budget || 0) >= price;
-      });
-    });
+  const cheapestTierPrice = Object.values(activeTiers).reduce(
+    (min, t) => Math.min(min, Number(t?.price) || Infinity), Infinity
+  );
+  const canAnyoneBuyInFuture = futureLotNums.length > 0 && participants.some(entry => {
+    const squadSize = Array.isArray(entry?.squad) ? entry.squad.length : 0;
+    return squadSize < SQUAD_MAX && Number(entry?.budget || 0) >= cheapestTierPrice;
   });
 
   const handleEndGame = async () => {
@@ -579,13 +666,72 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 272px", height:"100vh", background:"#04060a", overflow:"hidden" } },
     toast && React.createElement(Toast, toast),
-    analyserOpen && React.createElement(SquadAnalyser, {
+    React.createElement(SquadAnalyser, {
       participants,
       wishlists,
       players: activePlayers,
       tiers: activeTiers,
       selectedName: user.username,
       onClose: () => setAnalyserOpen(false),
+      hidden: !analyserOpen,
+      mysteryEnabled,
+      mysteryCardUsed: myMysteryUsed,
+      mysteryCardPrice: MYSTERY_CARD_PRICE,
+    }),
+    mysteryDisclaimerOpen && React.createElement("div", {
+      style: {
+        position: "fixed", inset: 0, background: "#000000cc", zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+      },
+      onClick: (e) => { if (e.target === e.currentTarget) setMysteryDisclaimerOpen(false); },
+    },
+      React.createElement("div", {
+        style: {
+          background: "linear-gradient(160deg,#131008,#0a0c12)",
+          border: "1px solid #FFD70055",
+          borderRadius: 16,
+          padding: "28px 28px 24px",
+          maxWidth: 380,
+          width: "100%",
+          boxShadow: "0 0 40px #FFD70018",
+          animation: "scaleIn .3s ease",
+          textAlign: "center",
+        },
+      },
+        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 26, color: "#FFD700", letterSpacing: 4, marginBottom: 14, textShadow: "0 0 20px #FFD70055" } }, "MYSTERY CARD"),
+        React.createElement("div", {
+          style: {
+            background: "#0e0c02", border: "1px solid #FFD70033", borderRadius: 10,
+            padding: "14px 16px", marginBottom: 18, textAlign: "left",
+          },
+        },
+          React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 11, color: "#FFD700", letterSpacing: 2, marginBottom: 8 } }, "⚠️ DISCLAIMER"),
+          React.createElement("ul", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#bbb", margin: 0, paddingLeft: 18, lineHeight: 1.7 } },
+            React.createElement("li", null, `Costs a flat ${MYSTERY_CARD_PRICE}M regardless of which player is revealed.`),
+            React.createElement("li", null, "You cannot back out once you start scratching the card."),
+            React.createElement("li", null, "The revealed player is added to your squad immediately."),
+            React.createElement("li", null, "Each bidder can only use the Mystery Card once per auction."),
+          )
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 10 } },
+          React.createElement("button", {
+            onClick: () => setMysteryDisclaimerOpen(false),
+            style: { ...BTN.ghost, flex: 1 },
+          }, "CANCEL"),
+          React.createElement("button", {
+            onClick: () => { setMysteryDisclaimerOpen(false); setMysteryModalOpen(true); },
+            style: { ...BTN.gold, flex: 1, fontSize: 13, letterSpacing: 1 },
+          }, `CONFIRM — SPEND ${MYSTERY_CARD_PRICE}M`)
+        )
+      )
+    ),
+    mysteryModalOpen && React.createElement(MysteryScratchModal, {
+      player: myMysteryCandidate,
+      tiers: activeTiers,
+      price: MYSTERY_CARD_PRICE,
+      revealing: actionPending && actionKind === "mystery",
+      onScratchComplete: handleConfirmMysteryReveal,
+      onClose: () => setMysteryModalOpen(false),
     }),
     showWaitingOverlayDebounced && React.createElement("div", {
       style:{
@@ -834,6 +980,18 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
           lotIdx,
           totalLots:lotOrder.length,
           tiers: activeTiers,
+        })
+      ),
+      mysteryEnabled && React.createElement("div", { style:{ borderTop:"1px solid #0f1218", padding:"10px", flexShrink:0 } },
+        React.createElement(MysteryCard, {
+          available: mysteryAvailable,
+          used: myMysteryUsed,
+          revealedPlayer: myParticipant?.squad?.find((p) => p.viaMystery) || null,
+          price: MYSTERY_CARD_PRICE,
+          hasPool: Boolean(myMysteryCandidate),
+          affordable: myMysteryAffordable,
+          squadHasRoom: myMysterySquadHasRoom,
+          onClick: handleOpenMysteryCard,
         })
       ),
       React.createElement("div", { style:{ borderTop:"1px solid #0f1218", padding:"8px 10px", flexShrink:0 } },

@@ -21,7 +21,7 @@ function getSocket() {
   return sharedSocket;
 }
 
-export function subscribeToSessionStream(sessionId, handlers = {}) {
+export function subscribeToSessionStream(sessionId, handlers = {}, username = "") {
   const id = String(sessionId || "").trim();
   if (!id) return () => {};
 
@@ -31,7 +31,7 @@ export function subscribeToSessionStream(sessionId, handlers = {}) {
   const onReconnect = handlers.onReconnect;
 
   const join = () => {
-    socket.emit("session:join", { sessionId: id });
+    socket.emit("session:join", { sessionId: id, username });
   };
 
   const handleConnect = () => {
@@ -60,7 +60,7 @@ export function subscribeToSessionStream(sessionId, handlers = {}) {
   }
 
   return () => {
-    socket.emit("session:leave", { sessionId: id });
+    socket.emit("session:leave", { sessionId: id, username });
     socket.off("connect", handleConnect);
     socket.off("session:update", handleUpdate);
     socket.off("session:closed", handleClosed);

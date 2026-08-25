@@ -184,7 +184,7 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
                   React.createElement("div", null,
                     React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, s.name || `Auction #${i+1}`),
                     React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
-                      `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${LOTS} · `,
+                      `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${s.lotOrder?.length || LOTS} · `,
                       React.createElement("span", { style:{ color: s.status==="complete" ? "#00FF88" : "#FFD700" } },
                         s.status === "complete" ? "✓ Complete" : "In Progress"
                       )

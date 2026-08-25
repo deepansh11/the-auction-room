@@ -12,6 +12,7 @@ import { ResultsScreen } from "../screens/ResultsScreen.jsx";
 import { BoisBanner } from "../components/BoisBanner.jsx";
 import { getRoomCodeFromUrl, isValidRoomCode } from "../utils/roomUtils.js";
 import { clearLocalAuthUser, getLocalAuthUser, setLocalAuthUser } from "../lib/localAuth.js";
+import { setAnalyticsAuthToken, trackEvent, trackScreenView } from "../lib/analytics.js";
 
 /* ─────────────────────────────────────────────────────────────────────────────
    ROOT APP
@@ -43,8 +44,17 @@ export default function App() {
   }, []);
 
   const findSessionByRoomCode = React.useCallback(async (roomCode) => {
-    return apiGetRoom(roomCode);
-  }, []);
+    return apiGetRoom(roomCode, user?.token);
+  }, [user?.token]);
+
+  React.useEffect(() => {
+    setAnalyticsAuthToken(user?.token || "");
+  }, [user?.token]);
+
+  React.useEffect(() => {
+    if (!user) return;
+    trackScreenView(screen);
+  }, [screen, user]);
 
   // Check for saved auth on mount
   React.useEffect(() => {
@@ -141,6 +151,8 @@ export default function App() {
     setLocalAuthUser(nextUser);
     setUser(nextUser);
     setWishlists(u.wishlists || {});
+    setAnalyticsAuthToken(nextUser.token);
+    trackEvent("auth_success", { username: u?.username });
     if (roomCode) {
       setPendingRoomCode(roomCode);
       setScreen("discover");
@@ -150,9 +162,11 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    trackEvent("logout");
     clearLocalAuthUser();
     setUser(null);
     setWishlists({});
+    setAnalyticsAuthToken("");
     setScreen("auth");
   };
 
@@ -204,6 +218,7 @@ export default function App() {
       setLastRoomCode(nextSession.roomCode);
       localStorage.setItem("lastRoomCode", nextSession.roomCode);
     }
+    trackEvent("room_joined", { roomCode: normalizedRoomCode });
     setSession(nextSession);
     setScreen(screenForSession(nextSession.status));
   };
@@ -215,6 +230,13 @@ export default function App() {
     if (nextSession?.roomCode) {
       setLastRoomCode(nextSession.roomCode);
       localStorage.setItem("lastRoomCode", nextSession.roomCode);
+    }
+    if (!skipCreate) {
+      trackEvent("room_created", {
+        participantCount: s?.participantNames?.length || 0,
+        mysteryEnabled: Boolean(s?.mysteryEnabled),
+        groupsEnabled: Boolean(s?.groupsEnabled),
+      });
     }
     setSession(nextSession);
     if (!deferNavigation) {
@@ -246,6 +268,7 @@ export default function App() {
       setScreen("discover");
       return;
     }
+    trackEvent("session_abandoned", { sessionId: session.id, isHost: session.host === user.username });
     try {
       await apiAbandonSession(session.id, user.token);
     } catch (err) {
@@ -256,6 +279,7 @@ export default function App() {
   };
 
   const handleBiddingEnd = async (participants) => {
+    trackEvent("auction_completed", { sessionId: session?.id, participantCount: participants?.length || 0 });
     setFinalParticipants(participants);
     setScreen("results");
   };
@@ -352,6 +376,13 @@ export default function App() {
         players: session?.playerPool || session?.shuffledPlayers || [],
         tiers: session?.tiers || TIERS,
         selectedName: user?.username,
+        auctionResultId: session?.id || session?.sessionId || "",
+        user,
+        host: session?.host || "",
+        groupsEnabled: Boolean(session?.groupsEnabled),
+        groups: session?.groups || {},
+        fixtures: session?.fixtures || {},
+        onRefresh: () => {},
       })
     )
   );
