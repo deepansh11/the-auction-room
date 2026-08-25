@@ -278,6 +278,7 @@ export function ResultsScreen({
   // Goals are auto-synced: every edit updates the local table immediately, then persists to the
   // backend shortly after (debounced) so the points/GD table stays in sync without extra clicks.
   const handleFixtureGoalChange = (groupLabel, fixtureId, side, rawValue) => {
+    if (!isHost) return;
     const value = rawValue === "" ? null : Math.max(0, parseInt(rawValue, 10) || 0);
     setFixturesState((prev) => {
       const next = {
