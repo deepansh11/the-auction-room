@@ -529,7 +529,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleConfirmMysteryReveal = async () => {
     if (!myParticipant || !myMysteryCandidate) { setMysteryModalOpen(false); return; }
-    if (myMysteryUsed || !mysteryAvailable) { setMysteryModalOpen(false); return; }
+    // Only block if the card was already used — don't re-check mysteryAvailable here because
+    // a sync arriving mid-scratch could flip userCanAct and silently cancel a committed reveal.
+    if (myMysteryUsed) { setMysteryModalOpen(false); return; }
     if (!beginActionLock(`Revealing Mystery Card: ${myMysteryCandidate.name}`, "mystery")) return;
 
     sfx("pick");
@@ -577,6 +579,8 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
           lastPickEvent: pickEvent,
         }, sequence, lotOrder);
       }
+      setMysteryModalOpen(false);
+      syncNowRef.current?.();
     } finally {
       endActionLock();
     }
@@ -618,6 +622,32 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         setLotOpen(false);
         setLotClosing(true);
         await saveSession(participants, lotIdx, turnIdx, newPassed, "active", false, true);
+        closeLot();
+        return;
+      }
+      const newTurnIdx = turnIdx % active.length;
+      setTurnIdx(newTurnIdx);
+      await saveSession(participants, lotIdx, newTurnIdx, newPassed);
+    } finally {
+      endActionLock();
+    }
+  };
+
+  // Host-only: force-skip the current picker when they're absent or unresponsive.
+  const handleHostForceSkip = async () => {
+    if (!isHost || !currentPickerKey || !lotOpen || lotClosing) return;
+    if (!beginActionLock(`Skipping ${currentPickerName}…`, "pass")) return;
+    sfx("pass");
+    trackEvent("host_force_skip", { skipped: currentPickerKey, lotIdx });
+    const newPassed = new Set([...passedThisLot, currentPickerKey]);
+    setPassedThisLot(newPassed);
+    showToast(`⏭️ Host skipped ${currentPickerName}`, "#FF6B35");
+    const active = sequence.filter((n) => !newPassed.has(n));
+    try {
+      if (active.length === 0 || availablePlayers.length === 0) {
+        setLotOpen(false);
+        setLotClosing(true);
+        await saveSession(participants, lotIdx, 0, newPassed, "active", false, true);
         closeLot();
         return;
       }
@@ -946,8 +976,19 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                       opacity: actionPending ? .65 : 1,
                       fontFamily:"'Bebas Neue'", letterSpacing:1 }
                   }, actionPending ? "REGISTERING…" : "PASS / DONE FOR LOT")
-                : React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555", fontWeight:700 } },
-                    currentPickerName ? `WAITING · ${currentPickerName} IS PICKING` : "WAITING FOR PICKER")
+                : React.createElement(React.Fragment, null,
+                    React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555", fontWeight:700 } },
+                      currentPickerName ? `WAITING · ${currentPickerName} IS PICKING` : "WAITING FOR PICKER"),
+                    isHost && currentPickerKey && React.createElement("button", {
+                      onClick: handleHostForceSkip,
+                      disabled: actionPending,
+                      style:{ background:"#FF6B3518", color:"#FF6B35", border:"1px solid #FF6B3544",
+                        borderRadius:7, padding:"5px 12px", fontSize:11,
+                        cursor: actionPending ? "not-allowed" : "pointer",
+                        opacity: actionPending ? .65 : 1,
+                        fontFamily:"'Bebas Neue'", letterSpacing:1 }
+                    }, `⏭ SKIP ${currentPickerName}`)
+                  )
             ),
             !lotClosing && !lotOpen && !isHost && React.createElement("span", { style:{
               fontFamily:"'Rajdhani'", fontSize:13, color:"#555", letterSpacing:1 } },
