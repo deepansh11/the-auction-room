@@ -59,13 +59,24 @@ export function generateRoundRobinFixtures(teamNames) {
 }
 
 /**
- * Build fixtures for every group at once — double round-robin (home + away leg for every pair).
+ * Build fixtures for every group at once.
+ * leg = "double" (default) generates both home + away legs for every pair.
+ * leg = "single" generates one match per pair (classic round-robin).
  * Returns { A: [{id, round, home, away, homeGoals, awayGoals}], ... }.
  */
-export function buildGroupFixtures(groups) {
+export function buildGroupFixtures(groups, leg = "double") {
   const fixtures = {};
   Object.entries(groups || {}).forEach(([label, teams]) => {
     const single = generateRoundRobinFixtures(teams);
+    if (leg !== "double") {
+      fixtures[label] = single.map((f, i) => ({
+        id: `${label}-${i}`,
+        ...f,
+        homeGoals: null,
+        awayGoals: null,
+      }));
+      return;
+    }
     const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
     const doubled = [];
     single.forEach((f, i) => {

@@ -22,6 +22,7 @@ export function SetupScreen({ user, onStart }) {
   const [mysteryEnabled, setMysteryEnabled] = React.useState(true);
   const [groupsEnabled, setGroupsEnabled] = React.useState(true);
   const [groupCount, setGroupCount] = React.useState(2);
+  const [fixtureLeg, setFixtureLeg] = React.useState("double");
   const [showShare, setShowShare] = React.useState(false);
   const [sessionData, setSessionData] = React.useState(null);
   const [copyStatus, setCopyStatus] = React.useState("");
@@ -108,9 +109,9 @@ export function SetupScreen({ user, onStart }) {
   const selectedPlayers = selectedBasePlayers.filter((p) => p.rating >= 80);
   const normalizedTiers = normalizeTiers(tierConfig);
 
-  // A group needs at least 2 teams to have any fixtures; cap the picker at 4 groups for sanity.
+  // A group needs at least 2 teams to have any fixtures; cap the picker at 5 groups for sanity.
   const maxGroupOptions = React.useMemo(() => {
-    const maxGroups = Math.max(1, Math.min(4, Math.floor(count / 2)));
+    const maxGroups = Math.max(1, Math.min(5, Math.floor(count / 2)));
     return Array.from({ length: maxGroups }, (_, i) => i + 1);
   }, [count]);
 
@@ -190,7 +191,7 @@ export function SetupScreen({ user, onStart }) {
       React.createElement("div", { style:{ marginBottom:18 } },
         React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:3, marginBottom:6 } }, "PARTICIPANTS"),
         React.createElement("div", { style:{ display:"flex", gap:5 } },
-          [2,3,4,5,6,7,8].map(n =>
+          [2,3,4,5,6,7,8,9,10].map(n =>
             React.createElement("button", { key:n, onClick: () => updateCount(n), style:{
               flex:1, background: count===n ? "#FFD700" : "#0d0f16",
               color: count===n ? "#000" : "#888",
@@ -275,7 +276,21 @@ export function SetupScreen({ user, onStart }) {
             )
           ),
           React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#444" } },
-            `≈${Math.ceil(count / groupCount)} teams per group`)
+            `≈${Math.ceil(count / groupCount)} teams per group`),
+          React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, marginTop:8, width:"100%" } },
+            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } }, "FIXTURE LEGS"),
+            ["single", "double"].map((leg) =>
+              React.createElement("button", { key:leg, type:"button", onClick: () => setFixtureLeg(leg), style:{
+                background: fixtureLeg===leg ? "#4FC3F7" : "#0d0f16",
+                color: fixtureLeg===leg ? "#000" : "#888",
+                border:`1px solid ${fixtureLeg===leg ? "#4FC3F7" : "#1e2028"}`,
+                borderRadius:6, padding:"4px 12px", cursor:"pointer",
+                fontFamily:"'Bebas Neue'", fontSize:13
+              }}, leg === "single" ? "1 LEG" : "2 LEGS")
+            ),
+            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#444" } },
+              fixtureLeg === "double" ? "Home + Away for every match" : "One match per pair")
+          )
         )
       ),
       React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:"1px solid #1e2230", borderRadius:10, padding:10 } },
@@ -405,6 +420,7 @@ export function SetupScreen({ user, onStart }) {
             mysteryEnabled,
             groupsEnabled,
             groupCount,
+            fixtureLeg,
           };
 
           try {

@@ -42,6 +42,7 @@ const roomSpecSchema = z.object({
   mysteryEnabled: z.boolean().optional(),
   groupsEnabled: z.boolean().optional(),
   groupCount: z.number().optional(),
+  fixtureLeg: z.enum(["single", "double"]).optional(),
 });
 
 function isPlaceholderName(name) {
@@ -162,6 +163,7 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
     // the host's browser never computes (and is never shown) the lot assignment, draw order,
     // pick sequence, or Mystery Card pools/candidates. They receive exactly the same
     // zero-information "draw phase" view as everyone else once this is stored.
+    const fixtureLeg = spec.fixtureLeg === "single" ? "single" : "double";
     const setup = generateAuctionSetup({
       selectedPlayers: spec.selectedPlayers,
       tiers: spec.tiers,
@@ -169,6 +171,7 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
       mysteryEnabled: Boolean(spec.mysteryEnabled),
       groupsEnabled: Boolean(spec.groupsEnabled),
       groupCount,
+      fixtureLeg,
     });
 
     const { db } = getFirebase();
@@ -201,6 +204,7 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
       mysteryUsed: {},
       groupsEnabled: Boolean(spec.groupsEnabled),
       groupCount,
+      fixtureLeg,
       groups: setup.groups,
       fixtures: setup.fixtures,
       participantNames: setup.sequence.slice(),

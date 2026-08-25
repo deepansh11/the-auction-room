@@ -32,7 +32,7 @@ export const POS_GROUPS = {
 export const getPosGroup = (pos) =>
   Object.entries(POS_GROUPS).find(([, g]) => g.positions.includes(pos))?.[0] || "MID";
 
-export const PCOLORS = ["#FFD700", "#4FC3F7", "#FF6B35", "#00FF88", "#FF3D71", "#C084FC", "#F97316", "#38BDF8"];
+export const PCOLORS = ["#FFD700", "#4FC3F7", "#FF6B35", "#00FF88", "#FF3D71", "#C084FC", "#F97316", "#38BDF8", "#34D399", "#FB923C"];
 
 export const FORMATIONS = {
   "4-3-3":   [["GK"],["LB","CB","CB","RB"],["CM","CM","CM"],["LW","ST","RW"]],

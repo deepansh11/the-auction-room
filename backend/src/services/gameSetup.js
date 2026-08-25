@@ -140,11 +140,20 @@ function generateRoundRobinFixtures(teamNames) {
   return fixtures;
 }
 
-/** Mirrors src/game/groupsFixtures.js#buildGroupFixtures — double round-robin (home + away leg). */
-function buildGroupFixtures(groups) {
+/** Mirrors src/game/groupsFixtures.js#buildGroupFixtures. leg = "double" | "single". */
+function buildGroupFixtures(groups, leg = "double") {
   const fixtures = {};
   Object.entries(groups || {}).forEach(([label, teams]) => {
     const single = generateRoundRobinFixtures(teams);
+    if (leg !== "double") {
+      fixtures[label] = single.map((f, i) => ({
+        id: `${label}-${i}`,
+        ...f,
+        homeGoals: null,
+        awayGoals: null,
+      }));
+      return;
+    }
     const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
     const doubled = [];
     single.forEach((f, i) => {
@@ -178,6 +187,7 @@ export function generateAuctionSetup({
   mysteryEnabled,
   groupsEnabled,
   groupCount,
+  fixtureLeg,
 }) {
   const numLots = participantNames.length;
   const lotOrder = shuffleArray(Array.from({ length: numLots }, (_, i) => i + 1));
@@ -189,7 +199,7 @@ export function generateAuctionSetup({
   const mysteryCurrent = mysteryEnabled ? rerollMysteryCandidates(mysteryPools, {}) : {};
 
   const groups = groupsEnabled ? assignGroups(sequence, groupCount) : {};
-  const fixtures = groupsEnabled ? buildGroupFixtures(groups) : {};
+  const fixtures = groupsEnabled ? buildGroupFixtures(groups, fixtureLeg === "single" ? "single" : "double") : {};
 
   return {
     lotOrder,
