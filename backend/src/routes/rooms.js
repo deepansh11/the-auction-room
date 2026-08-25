@@ -527,6 +527,59 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
   }
 });
 
+router.post("/rooms/:roomCode/readmit", requireUserAuth, async (req, res) => {
+  try {
+    const roomCode = roomCodeSchema.parse(String(req.params.roomCode || "").toUpperCase());
+    const targetUsername = String(req.body?.username || "").trim();
+    if (!targetUsername) return res.status(400).json({ error: "username is required" });
+
+    const hostUsername = String(req.user?.username || "").trim();
+    const { db } = getFirebase();
+
+    const roomDoc = await db.collection("rooms").doc(roomCode).get();
+    if (!roomDoc.exists) return res.status(404).json({ error: "Room not found" });
+
+    const sessionRef = db.collection("sessions").doc(String(roomDoc.data()?.sessionId));
+    const sessionSnap = await sessionRef.get();
+    if (!sessionSnap.exists) return res.status(404).json({ error: "Session not found" });
+
+    const session = sessionSnap.data();
+    if (session.host !== hostUsername) {
+      return res.status(403).json({ error: "Only the host can readmit players" });
+    }
+
+    const participants = Array.isArray(session.participants) ? [...session.participants] : [];
+    if (participants.some((p) => p.name === targetUsername)) {
+      emitSessionUpdate(session);
+      return res.json({ session: sanitizeSessionForViewer(session, hostUsername) });
+    }
+
+    const wasAbandoned = Array.isArray(session.abandonedBy) && session.abandonedBy.includes(targetUsername);
+    if (!wasAbandoned) {
+      return res.status(409).json({ error: `${targetUsername} was not in this session` });
+    }
+
+    const baseBudget = Number(session?.budgetPerBidder || 0);
+    const nextParticipants = [...participants, { name: targetUsername, budget: baseBudget, squad: [] }];
+    const nextSequence = Array.isArray(session.sequence) ? [...session.sequence] : [];
+    if (!nextSequence.includes(targetUsername)) nextSequence.push(targetUsername);
+    const nextAbandoned = (session.abandonedBy || []).filter((n) => n !== targetUsername);
+
+    const normalized = withParticipantNames({
+      ...session,
+      participants: nextParticipants,
+      sequence: nextSequence,
+      abandonedBy: nextAbandoned,
+    });
+    await sessionRef.set(normalized, { merge: true });
+    emitSessionUpdate(normalized);
+    return res.json({ session: sanitizeSessionForViewer(normalized, hostUsername) });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to readmit player", 400);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
 router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
   try {
     const { db } = getFirebase();

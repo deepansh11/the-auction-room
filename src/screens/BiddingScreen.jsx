@@ -8,7 +8,7 @@ import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
 import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, LOTS, MYSTERY_CARD_PRICE, getTierData, getTierKey } from "../game/constants.js";
-import { apiAbandonSession, apiGetSession, apiUpdateSession } from "../lib/api.js";
+import { apiAbandonSession, apiGetSession, apiUpdateSession, apiReadmitPlayer } from "../lib/api.js";
 import { subscribeToSessionStream } from "../lib/realtime.js";
 import { rotateArray } from "../utils/random.js";
 import { trackEvent } from "../lib/analytics.js";
@@ -43,6 +43,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [mysteryUsed, setMysteryUsed] = React.useState(initSession.mysteryUsed || {});
   const [mysteryModalOpen, setMysteryModalOpen] = React.useState(false);
   const [mysteryDisclaimerOpen, setMysteryDisclaimerOpen] = React.useState(false);
+  const [abandonedBy, setAbandonedBy] = React.useState(Array.isArray(initSession?.abandonedBy) ? initSession.abandonedBy : []);
+  const [readmitOpen, setReadmitOpen] = React.useState(false);
+  const [readmitPending, setReadmitPending] = React.useState(false);
   const lastPickEventRef = React.useRef(initSession.lastPickEvent?.id || null);
   const syncNowRef = React.useRef(() => {});
   const lastAutoSkippedRef = React.useRef(null);
@@ -149,7 +152,6 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     || null;
   const userCanAct = Boolean(currentPickerName && currentPickerName === user.username);
 
-  // Mystery Card is independent of whose turn it is — it always applies to the logged-in user's own squad.
   const myParticipant = participants.find((p) => p.name === user.username) || null;
   const myMysteryUsed = Boolean(mysteryUsed?.[user.username]);
   const myMysteryCandidateId = mysteryCurrent?.[user.username];
@@ -161,9 +163,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   // a client should ever know or need to know.
   const myMysteryAffordable = Boolean(myParticipant) && Number(myParticipant.budget || 0) >= MYSTERY_CARD_PRICE;
   const myMysterySquadHasRoom = Boolean(myParticipant) && myParticipant.squad.length < SQUAD_MAX;
+  // Mystery card is only available on your own turn while the lot is open.
   const mysteryAvailable = Boolean(
     mysteryEnabled && !myMysteryUsed && myMysteryCandidate
     && myMysteryAffordable && myMysterySquadHasRoom
+    && lotOpen && !lotClosing && userCanAct
   );
 
   const showToast = (msg, color="#FFD700") => {
@@ -252,6 +256,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       setMysteryEnabled(Boolean(latest.mysteryEnabled));
       setMysteryCurrent(latest.mysteryCurrent || {});
       setMysteryUsed(latest.mysteryUsed || {});
+      setAbandonedBy(Array.isArray(latest.abandonedBy) ? latest.abandonedBy : []);
 
       const latestPickEventId = latest.lastPickEvent?.id || null;
       if (latestPickEventId && latestPickEventId !== lastPickEventRef.current) {
@@ -293,13 +298,31 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       try {
         latest = await apiGetSession(initSession.id, user?.token);
       } catch (err) {
-        // If session was deleted (404 / "not found") the host ended or cancelled the game
         const msg = String(err?.message || "").toLowerCase();
         if (msg.includes("404") || msg.includes("not found")) {
-          if (!cancelled) {
-            showToast("Game has ended", "#FF3D71");
-            onAbandon();
-          }
+          if (cancelled) return;
+          // Retry once after 5 seconds — handles transient server blips where the session
+          // exists but briefly returned 404. If it still fails, treat as game ended.
+          showToast("⚠️ Connection lost, retrying…", "#FF6B35");
+          setTimeout(async () => {
+            if (cancelled) return;
+            try {
+              const retry = await apiGetSession(initSession.id, user?.token);
+              if (retry && !cancelled) {
+                failCount = 0;
+                applyLatest(retry);
+                schedule(BASE_POLL_MS);
+              } else if (!cancelled) {
+                showToast("Game has ended", "#FF3D71");
+                onAbandon();
+              }
+            } catch (_) {
+              if (!cancelled) {
+                showToast("Game has ended", "#FF3D71");
+                onAbandon();
+              }
+            }
+          }, 5000);
           return;
         }
         failCount = Math.min(failCount + 1, BACKOFF_MS.length);
@@ -533,11 +556,27 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     };
     lastPickEventRef.current = pickEvent.id;
 
+    const newPassed = new Set(passedThisLot);
+    const active = sequence.filter((n) => !newPassed.has(n));
+    const newTurnIdx = active.length > 0 ? (turnIdx + 1) % active.length : 0;
+
     try {
-      await saveSession(updatedParticipants, lotIdx, turnIdx, passedThisLot, "active", lotOpen, lotClosing, {
-        mysteryUsed: newMysteryUsed,
-        lastPickEvent: pickEvent,
-      }, sequence, lotOrder);
+      if (active.length === 0 || availablePlayers.length === 0) {
+        setTurnIdx(0);
+        setLotOpen(false);
+        setLotClosing(true);
+        await saveSession(updatedParticipants, lotIdx, 0, newPassed, "active", false, true, {
+          mysteryUsed: newMysteryUsed,
+          lastPickEvent: pickEvent,
+        }, sequence, lotOrder);
+        setTimeout(closeLot, 300);
+      } else {
+        setTurnIdx(newTurnIdx);
+        await saveSession(updatedParticipants, lotIdx, newTurnIdx, newPassed, "active", lotOpen, lotClosing, {
+          mysteryUsed: newMysteryUsed,
+          lastPickEvent: pickEvent,
+        }, sequence, lotOrder);
+      }
     } finally {
       endActionLock();
     }
@@ -548,6 +587,20 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       await apiAbandonSession(initSession.id, user?.token);
     } catch (_err) {}
     onAbandon();
+  };
+
+  const handleReadmit = async (username) => {
+    if (!roomCode || !username || readmitPending) return;
+    setReadmitPending(true);
+    try {
+      await apiReadmitPlayer(roomCode, username, user?.token);
+      showToast(`✅ ${username} has been re-admitted`, "#00FF88");
+      syncNowRef.current?.();
+    } catch (err) {
+      showToast(`Failed to readmit: ${err.message}`, "#FF3D71");
+    } finally {
+      setReadmitPending(false);
+    }
   };
 
   const handlePass = async () => {
@@ -725,6 +778,43 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         )
       )
     ),
+    readmitOpen && isHost && React.createElement("div", {
+      style: { position: "fixed", inset: 0, background: "#000000cc", zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 20 },
+      onClick: (e) => { if (e.target === e.currentTarget) setReadmitOpen(false); },
+    },
+      React.createElement("div", {
+        style: { background: "#0a0c12", border: "1px solid #FFD70044", borderRadius: 14,
+          padding: "24px 24px 20px", maxWidth: 340, width: "100%",
+          boxShadow: "0 0 40px #00000066" },
+      },
+        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#FFD700", letterSpacing: 3, marginBottom: 14 } }, "RE-ADMIT PLAYERS"),
+        abandonedBy.length === 0
+          ? React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#555", marginBottom: 16 } }, "No abandoned players.")
+          : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 } },
+              abandonedBy.map((name) =>
+                React.createElement("div", { key: name, style: { display: "flex", alignItems: "center", justifyContent: "space-between",
+                  background: "#0d0f16", borderRadius: 8, padding: "8px 12px" } },
+                  React.createElement("span", { style: { fontFamily: "'Exo 2'", fontSize: 13, color: "#ccc" } }, name),
+                  React.createElement("button", {
+                    onClick: () => handleReadmit(name),
+                    disabled: readmitPending,
+                    style: { background: "#00FF8818", color: "#00FF88", border: "1px solid #00FF8844",
+                      borderRadius: 6, padding: "4px 12px", cursor: readmitPending ? "default" : "pointer",
+                      fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1,
+                      opacity: readmitPending ? 0.6 : 1 }
+                  }, "RE-ADMIT")
+                )
+              )
+            ),
+        React.createElement("button", {
+          onClick: () => setReadmitOpen(false),
+          style: { width: "100%", background: "#0d0f16", color: "#888", border: "1px solid #1e2028",
+            borderRadius: 8, padding: "8px 0", cursor: "pointer",
+            fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1 }
+        }, "CLOSE")
+      )
+    ),
     mysteryModalOpen && React.createElement(MysteryScratchModal, {
       player: myMysteryCandidate,
       tiers: activeTiers,
@@ -819,6 +909,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
               disabled: actionPending,
               style:{ ...BTN.ghost, fontSize:11, color:isHost ? "#FF6B35" : "#FFD700", borderColor:isHost ? "#FF6B3544" : "#FFD70044" }
             }, isHost ? "CANCEL GAME" : "ABANDON"),
+            isHost && abandonedBy.length > 0 && React.createElement("button", {
+              onClick: () => setReadmitOpen(true),
+              style:{ ...BTN.ghost, fontSize:11, color:"#FF6B35", borderColor:"#FF6B3544" }
+            }, `👥 ABANDONED (${abandonedBy.length})`),
             !lotClosing && !lotOpen && isHost && React.createElement("button", {
               onClick:handleOpenLot,
               disabled: actionPending,

@@ -59,17 +59,27 @@ export function generateRoundRobinFixtures(teamNames) {
 }
 
 /**
- * Build fixtures for every group at once. Returns { A: [{id, round, home, away, homeGoals, awayGoals}], ... }.
+ * Build fixtures for every group at once — double round-robin (home + away leg for every pair).
+ * Returns { A: [{id, round, home, away, homeGoals, awayGoals}], ... }.
  */
 export function buildGroupFixtures(groups) {
   const fixtures = {};
   Object.entries(groups || {}).forEach(([label, teams]) => {
-    fixtures[label] = generateRoundRobinFixtures(teams).map((f, i) => ({
-      id: `${label}-${i}`,
-      ...f,
-      homeGoals: null,
-      awayGoals: null,
-    }));
+    const single = generateRoundRobinFixtures(teams);
+    const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
+    const doubled = [];
+    single.forEach((f, i) => {
+      doubled.push({ id: `${label}-${i * 2}`, ...f, homeGoals: null, awayGoals: null });
+      doubled.push({
+        id: `${label}-${i * 2 + 1}`,
+        round: f.round + maxRound,
+        home: f.away,
+        away: f.home,
+        homeGoals: null,
+        awayGoals: null,
+      });
+    });
+    fixtures[label] = doubled;
   });
   return fixtures;
 }

@@ -180,7 +180,7 @@ router.get("/results/:auctionResultId/points", requireUserAuth, async (req, res)
   }
 });
 
-// Save/update the group-stage fixtures (with goals) for a completed auction
+// Save/update the group-stage fixtures (with goals) for a completed auction — host only
 router.put("/results/:auctionResultId/fixtures", requireUserAuth, async (req, res) => {
   try {
     const { auctionResultId } = req.params;
@@ -190,7 +190,17 @@ router.put("/results/:auctionResultId/fixtures", requireUserAuth, async (req, re
       return res.status(400).json({ error: "auctionResultId and a fixtures object are required" });
     }
 
+    const username = String(req.user?.username || "").trim();
     const { db } = getFirebase();
+
+    const snap = await db.collection("auctionResults").doc(auctionResultId).get();
+    if (snap.exists) {
+      const result = snap.data();
+      if (result.host && result.host !== username) {
+        return res.status(403).json({ error: "Only the host can save fixtures" });
+      }
+    }
+
     await db.collection("auctionResults").doc(auctionResultId).set({
       fixtures,
       updatedAt: Date.now(),

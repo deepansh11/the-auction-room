@@ -155,6 +155,15 @@ export async function apiUpdateSession(sessionId, session, token) {
   });
 }
 
+export async function apiReadmitPlayer(roomCode, username, token) {
+  const data = await request(`/api/rooms/${encodeURIComponent(roomCode)}/readmit`, {
+    method: "POST",
+    body: { username },
+    token,
+  });
+  return data?.session;
+}
+
 export async function apiAbandonSession(sessionId, token) {
   const data = await request(`/api/sessions/${encodeURIComponent(sessionId)}/abandon`, {
     method: "POST",

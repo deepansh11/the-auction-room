@@ -37,7 +37,7 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
       return React.createElement("div", {
         style: { width: 34, background: "#05070d", border: "1px solid #1e2028", borderRadius: 4,
           color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 13, textAlign: "center", padding: "2px 0", display: "flex", alignItems: "center", justifyContent: "center", minHeight: 24 }
-      }, value ?? "—");
+      }, 0);
     }
     return React.createElement("input", {
       type: "number", min: 0, value: value ?? "",
@@ -398,19 +398,27 @@ export function ResultsScreen({
                           background:"#0d0f16", borderRadius:7, padding:"6px 10px"
                         }},
                           React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:12, color:"#ccc", textAlign:"right", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, f.home),
-                          React.createElement("input", {
-                            type:"number", min:0, value: f.homeGoals ?? "",
-                            onChange: (e) => handleFixtureGoalChange(label, f.id, "home", e.target.value),
-                            style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
-                              color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0" }
-                          }),
+                          isHost
+                            ? React.createElement("input", {
+                                type:"number", min:0, value: f.homeGoals ?? "",
+                                onChange: (e) => handleFixtureGoalChange(label, f.id, "home", e.target.value),
+                                style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
+                                  color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0" }
+                              })
+                            : React.createElement("div", { style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
+                                color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0",
+                                display:"flex", alignItems:"center", justifyContent:"center", minHeight:20 } }, 0),
                           React.createElement("span", { style:{ color:"#444", textAlign:"center", fontSize:11 } }, "–"),
-                          React.createElement("input", {
-                            type:"number", min:0, value: f.awayGoals ?? "",
-                            onChange: (e) => handleFixtureGoalChange(label, f.id, "away", e.target.value),
-                            style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
-                              color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0" }
-                          }),
+                          isHost
+                            ? React.createElement("input", {
+                                type:"number", min:0, value: f.awayGoals ?? "",
+                                onChange: (e) => handleFixtureGoalChange(label, f.id, "away", e.target.value),
+                                style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
+                                  color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0" }
+                              })
+                            : React.createElement("div", { style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
+                                color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0",
+                                display:"flex", alignItems:"center", justifyContent:"center", minHeight:20 } }, 0),
                           React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:12, color:"#ccc", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, f.away)
                         )
                       ),
