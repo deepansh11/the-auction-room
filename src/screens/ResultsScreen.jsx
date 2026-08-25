@@ -401,24 +401,27 @@ export function ResultsScreen({
                 groups,
                 fixturesState,
                 knockoutScores,
-                onScoreChange: (matchId, side, value) => {
-                  setKnockoutScores(prev => {
-                    const next = {
-                      ...prev,
-                      [matchId]: { ...(prev[matchId] || {}), [side]: value === "" ? null : Math.max(0, Number(value) || 0) }
-                    };
-                    // Debounce-save to backend so other users see updates
-                    if (auctionResultId && user?.token) {
-                      if (knockoutSaveTimerRef.current) clearTimeout(knockoutSaveTimerRef.current);
-                      knockoutSaveTimerRef.current = setTimeout(async () => {
-                        try {
-                          await apiSaveFixtures(auctionResultId, { ...fixturesState, _knockout: next }, user.token);
-                        } catch (_) {}
-                      }, 600);
-                    }
-                    return next;
-                  });
-                },
+                isHost,
+                publishing: knockoutPublishing,
+                published: knockoutPublished,
+                onScoreChange: isHost ? (matchId, side, value) => {
+                  setKnockoutPublished(false);
+                  setKnockoutScores(prev => ({
+                    ...prev,
+                    [matchId]: { ...(prev[matchId] || {}), [side]: value === "" ? null : Math.max(0, Number(value) || 0) }
+                  }));
+                } : null,
+                onPublish: isHost ? async () => {
+                  if (!auctionResultId || !user?.token) return;
+                  setKnockoutPublishing(true);
+                  try {
+                    await apiSaveFixtures(auctionResultId, { ...fixturesState, _knockout: knockoutScores }, user.token);
+                    setKnockoutPublished(true);
+                  } catch (_) {}
+                  finally { setKnockoutPublishing(false); }
+                } : null,
+                onRefresh: !isHost ? loadLatestFixtures : null,
+                refreshing: loadingLatest,
               })
             )
       ),
