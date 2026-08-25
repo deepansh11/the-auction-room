@@ -979,7 +979,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                 : React.createElement(React.Fragment, null,
                     React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555", fontWeight:700 } },
                       currentPickerName ? `WAITING · ${currentPickerName} IS PICKING` : "WAITING FOR PICKER"),
-                    isHost && currentPickerKey && React.createElement("button", {
+                    isHost && currentPickerKey && /^player\s+\d+$/i.test(String(currentPickerName || "").trim()) && React.createElement("button", {
                       onClick: handleHostForceSkip,
                       disabled: actionPending,
                       style:{ background:"#FF6B3518", color:"#FF6B35", border:"1px solid #FF6B3544",
