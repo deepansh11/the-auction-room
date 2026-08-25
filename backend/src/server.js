@@ -9,6 +9,7 @@ import authRoutes from "./routes/auth.js";
 import roomRoutes from "./routes/rooms.js";
 import userRoutes from "./routes/users.js";
 import resultRoutes from "./routes/results.js";
+import analyticsRoutes from "./routes/analytics.js";
 import { initRealtime } from "./services/realtime.js";
 
 const app = express();
@@ -73,6 +74,7 @@ app.use("/api", authRoutes);
 app.use("/api", roomRoutes);
 app.use("/api", userRoutes);
 app.use("/api", resultRoutes);
+app.use("/api", analyticsRoutes);
 
 app.use((err, _req, res, _next) => {
   const status = err?.message === "CORS blocked" ? 403 : 500;

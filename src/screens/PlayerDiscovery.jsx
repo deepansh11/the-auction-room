@@ -70,7 +70,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
 
   const playerWishlist = wishlists[user.username] || [];
   const allClubs = Array.from(new Set(allPlayers.map(p => p.club)));
-  const ratingRanges = ["ALL", "89+", "87-88", "84-86", "80-83", "79", "75-78", "<75"];
+  const ratingRanges = ["ALL", "89+", "87-88", "84-86", "80-83"];
 
   const filteredPlayers = allPlayers.filter(p => {
     const matchesSearch = !searchTerm || 
@@ -78,14 +78,11 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       p.club.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesPos = selectedPos === "ALL" || getPosGroup(p.pos) === selectedPos;
     const matchesClub = selectedClub === "ALL" || p.club === selectedClub;
-    const matchesRating = selectedRating === "ALL" || 
+    const matchesRating = selectedRating === "ALL" ||
       (selectedRating === "89+" ? p.rating >= 89 :
        selectedRating === "87-88" ? p.rating >= 87 && p.rating <= 88 :
        selectedRating === "84-86" ? p.rating >= 84 && p.rating <= 86 :
-       selectedRating === "80-83" ? p.rating >= 80 && p.rating <= 83 :
-       selectedRating === "79" ? p.rating === 79 :
-       selectedRating === "75-78" ? p.rating >= 75 && p.rating <= 78 :
-       p.rating < 75);
+       p.rating >= 80 && p.rating <= 83);
     return matchesSearch && matchesPos && matchesClub && matchesRating;
   });
 
@@ -223,7 +220,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
                     React.createElement("div", null,
                       React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, s.name || `Auction #${i+1}`),
                       React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
-                        `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${LOTS} · `,
+                        `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${s.lotOrder?.length || LOTS} · `,
                         React.createElement("span", { style:{ color: s.status==="complete" ? "#00FF88" : "#FFD700" } },
                           s.status === "complete" ? "✓ Complete" : "In Progress"
                         )
@@ -578,7 +575,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
                   React.createElement("div", null,
                     React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, s.name || `Auction #${i+1}`),
                     React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
-                      `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${LOTS} · `,
+                      `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${s.lotOrder?.length || LOTS} · `,
                       React.createElement("span", { style:{ color: s.status==="complete" ? "#00FF88" : "#FFD700" } },
                         s.status === "complete" ? "✓ Complete" : "In Progress"
                       )

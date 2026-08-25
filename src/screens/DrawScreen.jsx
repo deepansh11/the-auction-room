@@ -4,7 +4,6 @@ import { sfx } from "../utils/sfx.js";
 import { apiGetSession, apiUpdateSession } from "../lib/api.js";
 import { subscribeToSessionStream } from "../lib/realtime.js";
 import { PCOLORS } from "../game/constants.js";
-import { shuffleArray } from "../utils/random.js";
 
 export function DrawScreen({ session, onComplete, onAbandon, user }) {
   const [liveSession, setLiveSession] = React.useState(session);
@@ -51,7 +50,7 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       }
 
       try {
-        const latest = await apiGetSession(session.id);
+        const latest = await apiGetSession(session.id, user?.token);
         if (!latest || cancelled) return;
         failCount = 0;
         applyLatest(latest);
@@ -102,7 +101,7 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       onReconnect: () => {
         syncNowRef.current?.();
       },
-    });
+    }, user?.username);
 
     syncSession(true);
 
@@ -117,13 +116,14 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
         document.removeEventListener("visibilitychange", onVisibility);
       }
     };
-  }, [session.id, onComplete, onAbandon]);
+  }, [session.id, onComplete, onAbandon, user?.username, user?.token]);
 
+  const totalCount = liveSession.participants?.length || 0;
   const phase = Number(liveSession.drawPhase || 0);
   const shown = phase === 0
-    ? liveSession.lotOrder.slice(0, Number(liveSession.revealedLotCount || 0))
-    : liveSession.sequence.slice(0, Number(liveSession.revealedPickCount || 0));
-  const lotRevealComplete = phase === 0 && shown.length >= (liveSession.lotOrder?.length || 0);
+    ? (Array.isArray(liveSession.lotOrder) ? liveSession.lotOrder : [])
+    : (Array.isArray(liveSession.sequence) ? liveSession.sequence : []);
+  const lotRevealComplete = phase === 0 && shown.length >= totalCount;
 
   const persistDrawState = async (patch) => {
     if (!isHost) return;
@@ -140,22 +140,23 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
     if (!isHost) return;
     sfx("reveal");
     if (phase === 0) {
-      if (shown.length >= liveSession.lotOrder.length) return;
-      const nextCount = Math.min(shown.length + 1, liveSession.lotOrder.length);
+      if (shown.length >= totalCount) return;
+      const nextCount = Math.min(shown.length + 1, totalCount);
       await persistDrawState({ revealedLotCount: nextCount });
-      if (nextCount === liveSession.lotOrder.length) {
+      if (nextCount === totalCount) {
         setTimeout(() => {
-          const randomSequence = shuffleArray((liveSession.sequence || []));
-          persistDrawState({ drawPhase: 1, revealedPickCount: 0, sequence: randomSequence });
+          // The true pick order was already generated (and hidden) server-side at creation —
+          // no shuffling happens here, just move on to revealing it.
+          persistDrawState({ drawPhase: 1, revealedPickCount: 0 });
         }, 600);
       }
     } else {
-      const nextCount = Math.min(shown.length + 1, liveSession.sequence.length);
+      const nextCount = Math.min(shown.length + 1, totalCount);
       await persistDrawState({ revealedPickCount: nextCount });
     }
   };
 
-  const done = phase===1 && shown.length===liveSession.sequence.length;
+  const done = phase===1 && shown.length===totalCount;
 
   const startBidding = async () => {
     if (!isHost) return;
@@ -201,15 +202,15 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       ),
 
       phase===0 && React.createElement("div", { style:{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap", marginBottom:22 } },
-        liveSession.lotOrder.map((lot, i) =>
+        Array.from({ length: totalCount }, (_, i) =>
           i < shown.length
             ? React.createElement("div", { key:i, style:{
-                width:58, height:58, borderRadius:10, background:cols[i],
+                width:58, height:58, borderRadius:10, background:cols[i % cols.length],
                 display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
                 color:"#000", animation:"flipCard .4s ease both", fontFamily:"'Bebas Neue'"
               }},
                 React.createElement("span", { style:{ fontSize:9, letterSpacing:1 } }, "LOT"),
-                React.createElement("span", { style:{ fontSize:26, lineHeight:1 } }, lot)
+                React.createElement("span", { style:{ fontSize:26, lineHeight:1 } }, shown[i])
               )
             : React.createElement("div", { key:i, style:{ width:58, height:58, borderRadius:10,
                 background:"#0d0f16", border:"2px dashed #1e2028" } })
@@ -217,15 +218,15 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       ),
 
       phase===1 && React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:7, marginBottom:22 } },
-        liveSession.sequence.map((name, i) =>
+        Array.from({ length: totalCount }, (_, i) =>
           i < shown.length
             ? React.createElement("div", { key:i, style:{
                 display:"flex", alignItems:"center", gap:12,
-                background:"#0d0f16", border:`1px solid ${PCOLORS[i]}44`,
+                background:"#0d0f16", border:`1px solid ${PCOLORS[i % PCOLORS.length]}44`,
                 borderRadius:9, padding:"10px 14px", animation:"slideR .4s ease both"
               }},
-                React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:PCOLORS[i], width:28 } }, `#${i+1}`),
-                React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:15, fontWeight:700, color:"#fff" } }, name),
+                React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:PCOLORS[i % PCOLORS.length], width:28 } }, `#${i+1}`),
+                React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:15, fontWeight:700, color:"#fff" } }, shown[i]),
                 i===0 && React.createElement("span", { style:{ marginLeft:"auto", fontFamily:"'Rajdhani'", fontSize:10,
                   color:"#FFD700", fontWeight:700, letterSpacing:1 } }, "OPENS FIRST")
               )
