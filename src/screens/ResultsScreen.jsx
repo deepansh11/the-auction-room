@@ -9,15 +9,18 @@ import { apiSaveAuctionPoints, apiSaveFixtures } from "../lib/api.js";
 import { trackEvent } from "../lib/analytics.js";
 
 // ── World Cup Knockout Bracket ────────────────────────────────────────────────
-function KnockoutBracket({ groups, fixturesState, knockoutScores, onScoreChange }) {
+function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, isHost, onScoreChange, onPublish, publishing, published, onRefresh, refreshing }) {
   const groupLabels = Object.keys(groups || {}).sort();
   const matchups = computeKnockoutMatchups(groupLabels);
 
-  // Resolve a seeding key like "1A" to the actual team name from the standing table
   function resolveSeed(key) {
     const pos = parseInt(key[0], 10) - 1;
     const grpLabel = key.slice(1);
-    const tbl = computeGroupTable(groups[grpLabel] || [], fixturesState[grpLabel] || []);
+    const rawTeams = (groups[grpLabel] || []).map((n) => nameMap[n] || n);
+    const rawFixtures = (fixturesState[grpLabel] || []).map((f) => ({
+      ...f, home: nameMap[f.home] || f.home, away: nameMap[f.away] || f.away,
+    }));
+    const tbl = computeGroupTable(rawTeams, rawFixtures);
     return tbl[pos]?.name || key;
   }
 
@@ -27,6 +30,21 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, onScoreChange 
     const ag = Number(sc.awayGoals);
     if (!Number.isFinite(hg) || !Number.isFinite(ag)) return null;
     return hg > ag ? homeTeam : ag > hg ? awayTeam : null;
+  }
+
+  function ScoreInput({ matchId, side, value }) {
+    if (!isHost) {
+      return React.createElement("div", {
+        style: { width: 34, background: "#05070d", border: "1px solid #1e2028", borderRadius: 4,
+          color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 13, textAlign: "center", padding: "2px 0", display: "flex", alignItems: "center", justifyContent: "center", minHeight: 24 }
+      }, value ?? "—");
+    }
+    return React.createElement("input", {
+      type: "number", min: 0, value: value ?? "",
+      onChange: (e) => onScoreChange?.(matchId, side, e.target.value),
+      style: { width: 34, background: "#05070d", border: "1px solid #1e2028", borderRadius: 4,
+        color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 13, textAlign: "center", padding: "2px 0" }
+    });
   }
 
   function MatchLine({ matchId, homeKey, awayKey, label }) {
@@ -44,78 +62,77 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, onScoreChange 
       React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#555", letterSpacing: 2, marginBottom: 4 } }, label),
       React.createElement("div", { style: rowStyle(home) },
         React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12, color: winner === home ? "#FFD700" : "#ccc", fontWeight: winner === home ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, home),
-        React.createElement("input", {
-          type: "number", min: 0, value: sc.homeGoals ?? "",
-          onChange: (e) => onScoreChange(matchId, "homeGoals", e.target.value),
-          style: { width: 34, background: "#05070d", border: "1px solid #1e2028", borderRadius: 4, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 13, textAlign: "center", padding: "2px 0" }
-        })
+        React.createElement(ScoreInput, { matchId, side: "homeGoals", value: sc.homeGoals })
       ),
       React.createElement("div", { style: rowStyle(away) },
         React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12, color: winner === away ? "#FFD700" : "#ccc", fontWeight: winner === away ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, away),
-        React.createElement("input", {
-          type: "number", min: 0, value: sc.awayGoals ?? "",
-          onChange: (e) => onScoreChange(matchId, "awayGoals", e.target.value),
-          style: { width: 34, background: "#05070d", border: "1px solid #1e2028", borderRadius: 4, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 13, textAlign: "center", padding: "2px 0" }
-        })
+        React.createElement(ScoreInput, { matchId, side: "awayGoals", value: sc.awayGoals })
       ),
       winner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#FFD700", marginTop: 3, letterSpacing: 1 } }, `→ ${winner} advances`)
     );
   }
 
-  // Build final matchup from semi-final winners
   const sfMatchups = matchups.filter(m => m.round === "R16");
   const half = Math.ceil(sfMatchups.length / 2);
   const leftSFs = sfMatchups.slice(0, half);
   const rightSFs = sfMatchups.slice(half);
-
-  // For 2 groups: leftSFs = [SF1], rightSFs = [SF2]
   const leftWinners = leftSFs.map(m => getWinner(m.id, resolveSeed(m.homeKey), resolveSeed(m.awayKey)));
   const rightWinners = rightSFs.map(m => getWinner(m.id, resolveSeed(m.homeKey), resolveSeed(m.awayKey)));
-
   const finalHomeTeam = leftWinners[0] || (leftSFs[0] ? `W:${leftSFs[0].id}` : "SF1 Winner");
   const finalAwayTeam = rightWinners[0] || (rightSFs[0] ? `W:${rightSFs[0].id}` : "SF2 Winner");
   const finalWinner = getWinner("FINAL", finalHomeTeam, finalAwayTeam);
   const finalSc = knockoutScores["FINAL"] || {};
 
   return React.createElement("div", { style: { background: "#07080f", border: "1px solid #FFD70033", borderRadius: 14, padding: 24, marginTop: 8 } },
-    React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 20, color: "#FFD700", letterSpacing: 3, textAlign: "center", marginBottom: 20 } }, "KNOCKOUT STAGE"),
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 } },
+      React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 20, color: "#FFD700", letterSpacing: 3 } }, "KNOCKOUT STAGE"),
+      // Host: PUBLISH button | Non-host: REFRESH button
+      isHost
+        ? React.createElement("button", {
+            onClick: onPublish,
+            disabled: publishing || published,
+            style: { background: published ? "#00FF8822" : "linear-gradient(135deg,#FFD700,#FFA500)",
+              color: published ? "#00FF88" : "#000", border: published ? "1px solid #00FF8844" : "none",
+              borderRadius: 7, padding: "6px 16px", cursor: publishing || published ? "default" : "pointer",
+              fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1,
+              opacity: publishing ? 0.7 : 1 }
+          }, publishing ? "PUBLISHING…" : published ? "✓ PUBLISHED" : "PUBLISH RESULTS")
+        : React.createElement("button", {
+            onClick: onRefresh,
+            disabled: refreshing,
+            style: { background: "#0d0f16", color: "#888", border: "1px solid #1e2028",
+              borderRadius: 7, padding: "6px 14px", cursor: refreshing ? "default" : "pointer",
+              fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1, opacity: refreshing ? 0.6 : 1 }
+          }, refreshing ? "LOADING…" : "↺ REFRESH")
+    ),
+    !isHost && React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#444", marginBottom: 12, textAlign: "right" } },
+      "Results are published by the host"
+    ),
     React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 0 } },
-      // Left column — semi-finals
       React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, flex: 1 } },
         leftSFs.map(m => React.createElement(MatchLine, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `SEMI-FINAL (${m.homeKey} v ${m.awayKey})` }))
       ),
-      // Bracket connector lines
       React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", padding: "0 8px", flexShrink: 0 } },
         React.createElement("div", { style: { width: 24, height: "50%", borderTop: "1px solid #FFD70044", borderRight: "1px solid #FFD70044" } }),
         React.createElement("div", { style: { width: 24, height: "50%", borderBottom: "1px solid #FFD70044", borderRight: "1px solid #FFD70044" } })
       ),
-      // Center — trophy + final
       React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "0 16px", flexShrink: 0, minWidth: 200 } },
         React.createElement("img", { src: "/world-cup-trophy.png", alt: "World Cup", style: { width: 80, height: "auto", filter: "drop-shadow(0 0 12px #FFD700aa)" } }),
         React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 13, color: "#FFD700", letterSpacing: 2, marginBottom: 4 } }, "FINAL"),
         React.createElement("div", { style: { background: "#0d0f16", border: "1px solid #FFD70044", borderRadius: 8, padding: "8px 12px", width: "100%" } },
-          [
-            { team: finalHomeTeam, side: "homeGoals" },
-            { team: finalAwayTeam, side: "awayGoals" },
-          ].map(({ team, side }) =>
+          [{ team: finalHomeTeam, side: "homeGoals" }, { team: finalAwayTeam, side: "awayGoals" }].map(({ team, side }) =>
             React.createElement("div", { key: side, style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
               React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12, color: finalWinner === team ? "#FFD700" : "#ccc", fontWeight: finalWinner === team ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, team),
-              React.createElement("input", {
-                type: "number", min: 0, value: finalSc[side] ?? "",
-                onChange: (e) => onScoreChange("FINAL", side, e.target.value),
-                style: { width: 34, background: "#05070d", border: "1px solid #1e2028", borderRadius: 4, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 13, textAlign: "center", padding: "2px 0" }
-              })
+              React.createElement(ScoreInput, { matchId: "FINAL", side, value: finalSc[side] })
             )
           )
         ),
         finalWinner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 14, color: "#FFD700", letterSpacing: 2, textAlign: "center", textShadow: "0 0 16px #FFD700aa" } }, `🏆 ${finalWinner}`)
       ),
-      // Right bracket connector
       React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", padding: "0 8px", flexShrink: 0 } },
         React.createElement("div", { style: { width: 24, height: "50%", borderTop: "1px solid #FFD70044", borderLeft: "1px solid #FFD70044" } }),
         React.createElement("div", { style: { width: 24, height: "50%", borderBottom: "1px solid #FFD70044", borderLeft: "1px solid #FFD70044" } })
       ),
-      // Right column — semi-finals
       React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, flex: 1 } },
         rightSFs.map(m => React.createElement(MatchLine, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `SEMI-FINAL (${m.homeKey} v ${m.awayKey})` }))
       )
@@ -330,8 +347,15 @@ export function ResultsScreen({
           : React.createElement(React.Fragment, null,
               // ── Group tables + fixtures ──
               Object.entries(groups).map(([label, teams]) => {
-                const groupFixtures = fixturesState[label] || [];
-                const table = computeGroupTable(teams, groupFixtures);
+                // Reconcile placeholder names with real participant names for display
+                const resolvedTeams = teams.map((n) => nameMap[n] || n);
+                const resolvedFixtures = (fixturesState[label] || []).map((f) => ({
+                  ...f,
+                  home: nameMap[f.home] || f.home,
+                  away: nameMap[f.away] || f.away,
+                }));
+                const groupFixtures = resolvedFixtures;
+                const table = computeGroupTable(resolvedTeams, resolvedFixtures);
                 return React.createElement("div", { key:label, style:{ background:"#0a0c12", border:"1px solid #1e2230", borderRadius:12, padding:18 } },
                   React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#4FC3F7", letterSpacing:2, marginBottom:12 } }, `GROUP ${label}`),
                   // Table (top)
@@ -401,6 +425,7 @@ export function ResultsScreen({
                 groups,
                 fixturesState,
                 knockoutScores,
+                nameMap,
                 isHost,
                 publishing: knockoutPublishing,
                 published: knockoutPublished,
