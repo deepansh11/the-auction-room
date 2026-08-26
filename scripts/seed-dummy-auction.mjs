@@ -11,10 +11,12 @@
  */
 
 const [,, API_BASE = "http://localhost:3001", USERNAME = "deepansh11", PASSWORD = "deepansh",
-  GROUP_COUNT_ARG = "2", LEG_ARG = "double"] = process.argv;
+  GROUP_COUNT_ARG = "2", LEG_ARG = "single", KNOCKOUT_FORMAT_ARG = "quarterFinal"] = process.argv;
 
 const GROUP_COUNT = Math.max(1, Math.min(5, Number(GROUP_COUNT_ARG) || 2));
-const LEG = LEG_ARG === "single" ? "single" : "double";
+const LEG = LEG_ARG === "double" ? "double" : "single";
+const KNOCKOUT_FORMAT = ["semiFinal", "quarterFinal", "finalOnly"].includes(KNOCKOUT_FORMAT_ARG)
+  ? KNOCKOUT_FORMAT_ARG : "quarterFinal";
 
 // ── Fixture generation (mirrors src/game/groupsFixtures.js) ──────────────
 
@@ -211,7 +213,7 @@ async function main() {
   console.log(`   API         : ${API_BASE}`);
   console.log(`   Host        : ${USERNAME}`);
   console.log(`   Participants: ${NAMES.length}`);
-  console.log(`   Groups      : ${GROUP_COUNT}  |  Leg: ${LEG}\n`);
+  console.log(`   Groups      : ${GROUP_COUNT}  |  Leg: ${LEG}  |  Knockout: ${KNOCKOUT_FORMAT}\n`);
 
   // 1. Login
   process.stdout.write("1. Logging in … ");
@@ -257,6 +259,7 @@ async function main() {
     groupsEnabled: true,
     groupCount: GROUP_COUNT,
     fixtureLeg: LEG,
+    knockoutFormat: KNOCKOUT_FORMAT,
     groups,
     fixtures,
     status: "complete",

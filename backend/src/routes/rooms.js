@@ -43,6 +43,7 @@ const roomSpecSchema = z.object({
   groupsEnabled: z.boolean().optional(),
   groupCount: z.number().optional(),
   fixtureLeg: z.enum(["single", "double"]).optional(),
+  knockoutFormat: z.enum(["semiFinal", "quarterFinal", "finalOnly"]).optional(),
 });
 
 function isPlaceholderName(name) {
@@ -164,6 +165,8 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
     // pick sequence, or Mystery Card pools/candidates. They receive exactly the same
     // zero-information "draw phase" view as everyone else once this is stored.
     const fixtureLeg = spec.fixtureLeg === "single" ? "single" : "double";
+    const knockoutFormat = ["semiFinal", "quarterFinal", "finalOnly"].includes(spec.knockoutFormat)
+      ? spec.knockoutFormat : "semiFinal";
     const setup = generateAuctionSetup({
       selectedPlayers: spec.selectedPlayers,
       tiers: spec.tiers,
@@ -205,6 +208,7 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
       groupsEnabled: Boolean(spec.groupsEnabled),
       groupCount,
       fixtureLeg,
+      knockoutFormat,
       groups: setup.groups,
       fixtures: setup.fixtures,
       participantNames: setup.sequence.slice(),

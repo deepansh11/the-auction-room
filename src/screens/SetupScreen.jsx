@@ -22,7 +22,8 @@ export function SetupScreen({ user, onStart }) {
   const [mysteryEnabled, setMysteryEnabled] = React.useState(true);
   const [groupsEnabled, setGroupsEnabled] = React.useState(true);
   const [groupCount, setGroupCount] = React.useState(2);
-  const [fixtureLeg, setFixtureLeg] = React.useState("double");
+  const [fixtureLeg, setFixtureLeg] = React.useState("single");
+  const [knockoutFormat, setKnockoutFormat] = React.useState("semiFinal");
   const [showShare, setShowShare] = React.useState(false);
   const [sessionData, setSessionData] = React.useState(null);
   const [copyStatus, setCopyStatus] = React.useState("");
@@ -290,6 +291,28 @@ export function SetupScreen({ user, onStart }) {
             ),
             React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#444" } },
               fixtureLeg === "double" ? "Home + Away for every match" : "One match per pair")
+          ),
+          // KNOCKOUT FORMAT
+          React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, marginTop:8, width:"100%", flexWrap:"wrap" } },
+            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } }, "KNOCKOUT FORMAT"),
+            [
+              { key: "semiFinal",    label: "SEMI FINALS",    desc: `top ${Math.max(1, Math.round(4/groupCount))}/group` },
+              { key: "quarterFinal", label: "QUARTER FINALS", desc: `top 4/group` },
+              { key: "finalOnly",    label: "FINAL ONLY",     desc: `top 1/group` },
+            ].map(({ key, label, desc }) =>
+              React.createElement("button", { key, type:"button", onClick: () => setKnockoutFormat(key), style:{
+                background: knockoutFormat===key ? "#FFD700" : "#0d0f16",
+                color:      knockoutFormat===key ? "#000"    : "#888",
+                border:    `1px solid ${knockoutFormat===key ? "#FFD700" : "#1e2028"}`,
+                borderRadius:6, padding:"4px 12px", cursor:"pointer",
+                fontFamily:"'Bebas Neue'", fontSize:13
+              }},
+                `${label}`,
+                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700,
+                  color: knockoutFormat===key ? "#00000088" : "#444",
+                  marginLeft:5 } }, `(${desc})`)
+              )
+            )
           )
         )
       ),
@@ -421,6 +444,7 @@ export function SetupScreen({ user, onStart }) {
             groupsEnabled,
             groupCount,
             fixtureLeg,
+            knockoutFormat,
           };
 
           try {

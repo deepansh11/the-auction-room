@@ -95,6 +95,7 @@ export async function apiCreateRoom(spec, token) {
     groupsEnabled: Boolean(spec.groupsEnabled),
     groupCount: spec.groupCount,
     fixtureLeg: spec.fixtureLeg,
+    knockoutFormat: spec.knockoutFormat,
   };
 
   const data = await request("/api/rooms", { method: "POST", body: { spec: roomSpec }, token });

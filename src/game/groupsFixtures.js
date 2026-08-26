@@ -201,17 +201,54 @@ export function buildGroupFixtures(groups, leg = "double") {
 }
 
 /**
- * Build the knockout bracket seedings for a given set of groups.
- * Standard World-Cup format: 1A vs 2B, 1B vs 2A (2 groups), extended for more.
+ * Build the knockout bracket first-round seedings.
+ *
+ * knockoutFormat:
+ *   "semiFinal"    — 4 qualifiers, SF → Final (default; backward-compat R16-* IDs)
+ *   "quarterFinal" — 8 qualifiers (top 4 per group for 2 groups), QF → SF → Final
+ *   "finalOnly"    — 2 qualifiers, straight to Final (returns [] — Final rendered directly)
+ *
  * Returns an array of { id, round, homeKey, awayKey } where keys are like "1A" / "2B".
  */
-export function computeKnockoutMatchups(groupLabels) {
+export function computeKnockoutMatchups(groupLabels, knockoutFormat = "semiFinal") {
   const labels = (groupLabels || []).filter(Boolean).sort();
   const n = labels.length;
   if (n < 2) return [];
 
+  if (knockoutFormat === "finalOnly") {
+    // No pre-final round; the Final is rendered directly with 1st from each half.
+    return [];
+  }
+
+  if (knockoutFormat === "quarterFinal") {
+    // World Cup crossover: top 4 from each group (designed for 2 groups).
+    // Left bracket half: 1A v 4B, 2A v 3B  →  SF-0
+    // Right bracket half: 1B v 4A, 2B v 3A →  SF-1
+    const qualPerGroup = 4; // fixed for 2-group QF format
+    const matchups = [];
+    const half = Math.ceil(n / 2);
+    for (let i = 0; i < half; i++) {
+      const g1 = labels[i];
+      const g2 = labels[n - 1 - i];
+      if (g1 === g2) continue;
+      // Left bracket: top seeds of g1 vs bottom seeds of g2
+      for (let q = 0; q < qualPerGroup / 2; q++) {
+        const top = q + 1;
+        const bot = qualPerGroup - q;
+        matchups.push({ id: `QF-${matchups.length}`, round: "QF", homeKey: `${top}${g1}`, awayKey: `${bot}${g2}` });
+      }
+      // Right bracket: top seeds of g2 vs bottom seeds of g1
+      for (let q = 0; q < qualPerGroup / 2; q++) {
+        const top = q + 1;
+        const bot = qualPerGroup - q;
+        matchups.push({ id: `QF-${matchups.length}`, round: "QF", homeKey: `${top}${g2}`, awayKey: `${bot}${g1}` });
+      }
+    }
+    return matchups;
+  }
+
+  // "semiFinal" — backward-compat R16-* IDs so stored knockoutScores still resolve.
   const matchups = [];
-  // Pair groups in halves: first half vs second half in cross pattern
   const half = Math.ceil(n / 2);
   for (let i = 0; i < half; i++) {
     const g1 = labels[i];
