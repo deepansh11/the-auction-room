@@ -272,6 +272,7 @@ export function computeGroupTable(teamNames, fixtures) {
   });
 
   (fixtures || []).forEach((f) => {
+    if (f.homeGoals == null || f.awayGoals == null) return;
     const hg = Number(f.homeGoals);
     const ag = Number(f.awayGoals);
     if (!Number.isFinite(hg) || !Number.isFinite(ag)) return;
