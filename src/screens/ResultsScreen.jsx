@@ -163,35 +163,87 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
     bracketBody = React.createElement("div", { style: { display: "flex", justifyContent: "center" } }, CenterFinal);
 
   } else if (isQF) {
-    // 5-column: [QF-0, QF-1] → connector → [SF-0] → connector → [FINAL] ← connector ← [SF-1] ← connector ← [QF-2, QF-3]
-    const leftQFs  = matchups.slice(0, 2);
-    const rightQFs = matchups.slice(2, 4);
+    // Top-down bracket: rounds stack vertically — no horizontal scroll needed.
+    // QF-0  QF-1  QF-2  QF-3
+    //    └──┘        └──┘
+    //    SF-0        SF-1
+    //        └──────┘
+    //          FINAL
+    const allQFs = [...matchups.slice(0, 2), ...matchups.slice(2, 4)];
     const [sfLeft, sfRight] = sfMatches;
+    const borderColor = "#FFD70033";
+    const roundLabel = (text) => React.createElement("div", {
+      style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#4FC3F7", letterSpacing: 3,
+        marginBottom: 6, textAlign: "center" }
+    }, text);
 
-    bracketBody = React.createElement("div", { style: { overflowX: "auto" } },
-      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 0, minWidth: 1100 } },
-        // Left QF column
-        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, width: 220, flexShrink: 0 } },
-          leftQFs.map(m => React.createElement(MatchBox, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `QF (${m.homeKey} v ${m.awayKey})`, minWidth: 0 }))
+    bracketBody = React.createElement("div", { style: { display: "flex", flexDirection: "column" } },
+
+      // ── QUARTER FINALS ────────────────────────────────────────────────────
+      roundLabel("QUARTER FINALS"),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 } },
+        allQFs.map(m => React.createElement(MatchBox, {
+          key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey,
+          label: `QF · ${m.homeKey} v ${m.awayKey}`, minWidth: 0,
+        }))
+      ),
+
+      // ── QF → SF connectors: two ∪ shapes ─────────────────────────────────
+      // 4-cell grid; cells 0+1 form left ∪, cells 2+3 form right ∪
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", height: 22 } },
+        [0, 1, 2, 3].map(i => React.createElement("div", { key: i, style: {
+          borderBottom: `1px solid ${borderColor}`,
+          [i % 2 === 0 ? "borderRight" : "borderLeft"]: `1px solid ${borderColor}`,
+        }}))
+      ),
+
+      // ── SEMI FINALS ───────────────────────────────────────────────────────
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", marginBottom: 6 } },
+        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#FFD700", letterSpacing: 2, textAlign: "center" } }, "SEMI-FINAL"),
+        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#FFD700", letterSpacing: 2, textAlign: "center" } }, "SEMI-FINAL")
+      ),
+      // SF-0 centered under left pair, SF-1 centered under right pair
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "center" } },
+          sfLeft && React.createElement(MatchBox, {
+            matchId: sfLeft.id, homeKey: sfLeft.homeKey, awayKey: sfLeft.awayKey, minWidth: 0,
+          })
         ),
-        React.createElement(Connector, { side: "left" }),
-        // Left SF
-        React.createElement("div", { style: { display: "flex", flexDirection: "column", justifyContent: "center", width: 220, flexShrink: 0 } },
-          sfLeft && React.createElement(MatchBox, { matchId: sfLeft.id, homeKey: sfLeft.homeKey, awayKey: sfLeft.awayKey, label: "SEMI-FINAL", minWidth: 0 })
-        ),
-        React.createElement(Connector, { side: "left" }),
-        // Center Final
-        CenterFinal,
-        React.createElement(Connector, { side: "right" }),
-        // Right SF
-        React.createElement("div", { style: { display: "flex", flexDirection: "column", justifyContent: "center", width: 220, flexShrink: 0 } },
-          sfRight && React.createElement(MatchBox, { matchId: sfRight.id, homeKey: sfRight.homeKey, awayKey: sfRight.awayKey, label: "SEMI-FINAL", minWidth: 0 })
-        ),
-        React.createElement(Connector, { side: "right" }),
-        // Right QF column
-        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, width: 220, flexShrink: 0 } },
-          rightQFs.map(m => React.createElement(MatchBox, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `QF (${m.homeKey} v ${m.awayKey})`, minWidth: 0 }))
+        React.createElement("div", { style: { display: "flex", justifyContent: "center" } },
+          sfRight && React.createElement(MatchBox, {
+            matchId: sfRight.id, homeKey: sfRight.homeKey, awayKey: sfRight.awayKey, minWidth: 0,
+          })
         )
+      ),
+
+      // ── SF → Final connector: one wide ∪ ─────────────────────────────────
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", height: 22 } },
+        React.createElement("div", { style: { borderBottom: `1px solid ${borderColor}`, borderRight: `1px solid ${borderColor}` } }),
+        React.createElement("div", { style: { borderBottom: `1px solid ${borderColor}`, borderLeft: `1px solid ${borderColor}` } })
+      ),
+
+      // ── FINAL ─────────────────────────────────────────────────────────────
+      React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 8, paddingTop: 4 } },
+        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 11, color: "#FFD700", letterSpacing: 3 } }, "FINAL"),
+        React.createElement("img", { src: "/world-cup-trophy.png", alt: "World Cup",
+          style: { width: 64, height: "auto", filter: "drop-shadow(0 0 10px #FFD700aa)" } }),
+        React.createElement("div", { style: { background: "#0d0f16", border: "1px solid #FFD70044", borderRadius: 8, padding: "8px 12px", minWidth: 240 } },
+          [
+            { team: finalHome, tbd: finalHomeTBD, side: "homeGoals" },
+            { team: finalAway, tbd: finalAwayTBD, side: "awayGoals" },
+          ].map(({ team, tbd, side }) =>
+            React.createElement("div", { key: side, style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
+              React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+                color: tbd ? "#333" : finalWinner === team ? "#FFD700" : "#ccc",
+                fontWeight: finalWinner === team ? 700 : 400,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                tbd ? "TBD" : team),
+              !tbd && React.createElement(ScoreInput, { matchId: "FINAL", side, value: finalSc[side] })
+            )
+          )
+        ),
+        finalWinner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 15, color: "#FFD700",
+          letterSpacing: 2, textAlign: "center", textShadow: "0 0 16px #FFD700aa" } }, `🏆 ${finalWinner}`)
       )
     );
 
