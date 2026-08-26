@@ -76,33 +76,35 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
 
   // Renders a single fixture box (used for QF, SF, and Final rounds).
   // homeKey/awayKey may be seeds ("1A") or winner refs ("W:QF-0").
+  // A slot is TBD when resolveTeam() still returns a "W:..." string (no winner yet).
   function MatchBox({ matchId, homeKey, awayKey, label, minWidth = 200 }) {
-    const home = homeKey ? resolveTeam(homeKey) : "TBD";
-    const away = awayKey ? resolveTeam(awayKey) : "TBD";
+    const home = homeKey ? resolveTeam(homeKey) : null;
+    const away = awayKey ? resolveTeam(awayKey) : null;
+    const homeTBD = !home || home.startsWith("W:");
+    const awayTBD = !away || away.startsWith("W:");
     const sc = knockoutScores[matchId] || {};
-    const winner = getWinner(matchId, home, away);
-    const isTBD = (t) => !t || t.startsWith("W:");
-    const rowStyle = (team) => ({
+    const winner = (!homeTBD && !awayTBD) ? getWinner(matchId, home, away) : null;
+    const rowStyle = (team, tbd) => ({
       display: "flex", alignItems: "center", gap: 8,
-      background: winner === team ? "#FFD70015" : "#0d0f16",
-      border: `1px solid ${winner === team ? "#FFD70044" : "#1e2028"}`,
+      background: !tbd && winner === team ? "#FFD70015" : "#0d0f16",
+      border: `1px solid ${!tbd && winner === team ? "#FFD70044" : "#1e2028"}`,
       borderRadius: 6, padding: "5px 8px", marginBottom: 3,
     });
     return React.createElement("div", { style: { minWidth } },
       label && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#555", letterSpacing: 2, marginBottom: 4 } }, label),
-      React.createElement("div", { style: rowStyle(home) },
+      React.createElement("div", { style: rowStyle(home, homeTBD) },
         React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
-          color: isTBD(homeKey) ? "#333" : winner === home ? "#FFD700" : "#ccc",
+          color: homeTBD ? "#333" : winner === home ? "#FFD700" : "#ccc",
           fontWeight: winner === home ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-          isTBD(homeKey) ? "TBD" : home),
-        !isTBD(homeKey) && React.createElement(ScoreInput, { matchId, side: "homeGoals", value: sc.homeGoals })
+          homeTBD ? "TBD" : home),
+        !homeTBD && React.createElement(ScoreInput, { matchId, side: "homeGoals", value: sc.homeGoals })
       ),
-      React.createElement("div", { style: rowStyle(away) },
+      React.createElement("div", { style: rowStyle(away, awayTBD) },
         React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
-          color: isTBD(awayKey) ? "#333" : winner === away ? "#FFD700" : "#ccc",
+          color: awayTBD ? "#333" : winner === away ? "#FFD700" : "#ccc",
           fontWeight: winner === away ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-          isTBD(awayKey) ? "TBD" : away),
-        !isTBD(awayKey) && React.createElement(ScoreInput, { matchId, side: "awayGoals", value: sc.awayGoals })
+          awayTBD ? "TBD" : away),
+        !awayTBD && React.createElement(ScoreInput, { matchId, side: "awayGoals", value: sc.awayGoals })
       ),
       winner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#FFD700", marginTop: 3, letterSpacing: 1 } }, `→ ${winner} advances`)
     );
@@ -119,23 +121,35 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
 
   // Trophy + Final box (always center).
   const finalLabels = groupLabels;
-  const finalHomeKey = isQF ? "W:SF-0" : isFinalOnly ? `1${finalLabels[0] || "A"}` : (matchups[0] ? `W:${matchups[0].id}` : "SF1 Winner");
-  const finalAwayKey = isQF ? "W:SF-1" : isFinalOnly ? `1${finalLabels[1] || "B"}` : (matchups[matchups.length - 1] ? `W:${matchups[matchups.length - 1].id}` : "SF2 Winner");
-  const finalHome = resolveTeam(finalHomeKey);
-  const finalAway = resolveTeam(finalAwayKey);
+  const finalHomeKey = isQF ? "W:SF-0" : isFinalOnly ? `1${finalLabels[0] || "A"}` : (matchups[0] ? `W:${matchups[0].id}` : null);
+  const finalAwayKey = isQF ? "W:SF-1" : isFinalOnly ? `1${finalLabels[1] || "B"}` : (matchups[matchups.length - 1] ? `W:${matchups[matchups.length - 1].id}` : null);
+  const finalHome = finalHomeKey ? resolveTeam(finalHomeKey) : null;
+  const finalAway = finalAwayKey ? resolveTeam(finalAwayKey) : null;
+  const finalHomeTBD = !finalHome || finalHome.startsWith("W:");
+  const finalAwayTBD = !finalAway || finalAway.startsWith("W:");
   const finalSc = knockoutScores["FINAL"] || {};
-  const finalWinner = getWinner("FINAL", finalHome, finalAway);
+  const finalWinner = (!finalHomeTBD && !finalAwayTBD) ? getWinner("FINAL", finalHome, finalAway) : null;
+  const finalRowStyle = (team, tbd) => ({
+    display: "flex", alignItems: "center", gap: 6, marginBottom: 4,
+    background: !tbd && finalWinner === team ? "#FFD70015" : "transparent",
+    borderRadius: 4, padding: "2px 4px",
+  });
 
   const CenterFinal = React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "0 16px", flexShrink: 0, minWidth: 200 } },
     React.createElement("img", { src: "/world-cup-trophy.png", alt: "World Cup", style: { width: 80, height: "auto", filter: "drop-shadow(0 0 12px #FFD700aa)" } }),
     React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 13, color: "#FFD700", letterSpacing: 2, marginBottom: 4 } }, "FINAL"),
     React.createElement("div", { style: { background: "#0d0f16", border: "1px solid #FFD70044", borderRadius: 8, padding: "8px 12px", width: "100%" } },
-      [{ team: finalHome, side: "homeGoals" }, { team: finalAway, side: "awayGoals" }].map(({ team, side }) =>
-        React.createElement("div", { key: side, style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
+      [
+        { team: finalHome, tbd: finalHomeTBD, side: "homeGoals" },
+        { team: finalAway, tbd: finalAwayTBD, side: "awayGoals" },
+      ].map(({ team, tbd, side }) =>
+        React.createElement("div", { key: side, style: finalRowStyle(team, tbd) },
           React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
-            color: finalWinner === team ? "#FFD700" : "#ccc", fontWeight: finalWinner === team ? 700 : 400,
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, team),
-          React.createElement(ScoreInput, { matchId: "FINAL", side, value: finalSc[side] })
+            color: tbd ? "#333" : finalWinner === team ? "#FFD700" : "#ccc",
+            fontWeight: finalWinner === team ? 700 : 400,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+            tbd ? "TBD" : team),
+          !tbd && React.createElement(ScoreInput, { matchId: "FINAL", side, value: finalSc[side] })
         )
       )
     ),
@@ -154,28 +168,30 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
     const rightQFs = matchups.slice(2, 4);
     const [sfLeft, sfRight] = sfMatches;
 
-    bracketBody = React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 0, overflowX: "auto" } },
-      // Left QF column
-      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, flex: 1, minWidth: 200 } },
-        leftQFs.map(m => React.createElement(MatchBox, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `QF (${m.homeKey} v ${m.awayKey})` }))
-      ),
-      React.createElement(Connector, { side: "left" }),
-      // Left SF
-      React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 } },
-        sfLeft && React.createElement(MatchBox, { matchId: sfLeft.id, homeKey: sfLeft.homeKey, awayKey: sfLeft.awayKey, label: `SEMI-FINAL`, minWidth: 200 })
-      ),
-      React.createElement(Connector, { side: "left" }),
-      // Center Final
-      CenterFinal,
-      React.createElement(Connector, { side: "right" }),
-      // Right SF
-      React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 } },
-        sfRight && React.createElement(MatchBox, { matchId: sfRight.id, homeKey: sfRight.homeKey, awayKey: sfRight.awayKey, label: `SEMI-FINAL`, minWidth: 200 })
-      ),
-      React.createElement(Connector, { side: "right" }),
-      // Right QF column
-      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, flex: 1, minWidth: 200 } },
-        rightQFs.map(m => React.createElement(MatchBox, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `QF (${m.homeKey} v ${m.awayKey})` }))
+    bracketBody = React.createElement("div", { style: { overflowX: "auto" } },
+      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 0, minWidth: 1100 } },
+        // Left QF column
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, width: 220, flexShrink: 0 } },
+          leftQFs.map(m => React.createElement(MatchBox, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `QF (${m.homeKey} v ${m.awayKey})`, minWidth: 0 }))
+        ),
+        React.createElement(Connector, { side: "left" }),
+        // Left SF
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", justifyContent: "center", width: 220, flexShrink: 0 } },
+          sfLeft && React.createElement(MatchBox, { matchId: sfLeft.id, homeKey: sfLeft.homeKey, awayKey: sfLeft.awayKey, label: "SEMI-FINAL", minWidth: 0 })
+        ),
+        React.createElement(Connector, { side: "left" }),
+        // Center Final
+        CenterFinal,
+        React.createElement(Connector, { side: "right" }),
+        // Right SF
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", justifyContent: "center", width: 220, flexShrink: 0 } },
+          sfRight && React.createElement(MatchBox, { matchId: sfRight.id, homeKey: sfRight.homeKey, awayKey: sfRight.awayKey, label: "SEMI-FINAL", minWidth: 0 })
+        ),
+        React.createElement(Connector, { side: "right" }),
+        // Right QF column
+        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 16, width: 220, flexShrink: 0 } },
+          rightQFs.map(m => React.createElement(MatchBox, { key: m.id, matchId: m.id, homeKey: m.homeKey, awayKey: m.awayKey, label: `QF (${m.homeKey} v ${m.awayKey})`, minWidth: 0 }))
+        )
       )
     );
 
