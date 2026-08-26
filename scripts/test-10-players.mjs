@@ -161,12 +161,44 @@ async function main() {
     console.log(`   Room code       : ${code}`);
     console.log(`   Session ID      : ${session?.id}`);
     console.log(`   Participants    : ${session?.participants?.length ?? "?"}`);
-    const groupLabels = Object.keys(session?.groups ?? {});
+    const groups  = session?.groups   ?? {};
+    const fixtures = session?.fixtures ?? {};
+    const groupLabels = Object.keys(groups).sort();
     console.log(`   Groups          : ${groupLabels.join(", ") || "none"}`);
+
+    // ── Detailed fixture breakdown ────────────────────────────────────────
+    console.log(`\n📋 Fixture breakdown`);
     groupLabels.forEach((g) => {
-      const fx = (session?.fixtures?.[g] || []).length;
-      console.log(`     Group ${g}: ${(session?.groups?.[g] || []).length} teams, ${fx} fixtures`);
+      const members = groups[g] ?? [];
+      const gfx     = fixtures[g] ?? [];
+      console.log(`\n  GROUP ${g}  (${members.length} teams · ${gfx.length} fixtures)`);
+      console.log(`  ${"─".repeat(52)}`);
+
+      // Count matches per team in this group
+      const teamMatches = {};
+      members.forEach(m => teamMatches[m] = 0);
+      gfx.forEach(f => { teamMatches[f.home] = (teamMatches[f.home]||0)+1; teamMatches[f.away] = (teamMatches[f.away]||0)+1; });
+
+      // Print by round
+      const byRound = {};
+      gfx.forEach(f => (byRound[f.round] = byRound[f.round] || []).push(f));
+      Object.keys(byRound).sort((a,b) => Number(a)-Number(b)).forEach(r => {
+        console.log(`  Round ${r}:`);
+        byRound[r].forEach(f => console.log(`    ${String(f.home).padEnd(14)} vs  ${f.away}`));
+      });
+
+      const counts = Object.values(teamMatches);
+      const minC = Math.min(...counts), maxC = Math.max(...counts);
+      console.log(`  → Matches/team: ${minC === maxC ? minC + " (equal ✓)" : `${minC}–${maxC} (unequal ✗)`}`);
     });
+
+    // Cross-group equality check
+    const allGroupCounts = groupLabels.flatMap(g => {
+      const members = groups[g] ?? [], gfx = fixtures[g] ?? [];
+      return members.map(m => gfx.filter(f => f.home === m || f.away === m).length);
+    });
+    const globalMin = Math.min(...allGroupCounts), globalMax = Math.max(...allGroupCounts);
+    console.log(`\n  Cross-group: all teams play ${globalMin === globalMax ? globalMin + " matches ✓" : `${globalMin}–${globalMax} matches ✗`}`);
   } catch (err) {
     console.log(`✗  ${err.message}`);
     if (err.data) console.error("   Response:", JSON.stringify(err.data, null, 2));

@@ -213,4 +213,32 @@ router.put("/results/:auctionResultId/fixtures", requireUserAuth, async (req, re
   }
 });
 
+// Seed a fully-completed dummy auction result for testing the Results/Groups UI.
+// The caller supplies the entire resultPayload; host is forced to the authenticated user.
+router.post("/seed/auction-result", requireUserAuth, async (req, res) => {
+  try {
+    const username = String(req.user?.username || "").trim();
+    const payload  = req.body?.result;
+    if (!payload || !payload.sessionId) {
+      return res.status(400).json({ error: "result.sessionId is required" });
+    }
+
+    const { db } = getFirebase();
+    const doc = {
+      ...payload,
+      host: username,          // always owned by the caller
+      status: "complete",
+      seeded: true,
+      completedAt: Date.now(),
+      createdAt:   Date.now(),
+    };
+
+    await db.collection("auctionResults").doc(String(payload.sessionId)).set(doc, { merge: true });
+    return res.status(201).json({ id: payload.sessionId });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to seed auction result", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
 export default router;
