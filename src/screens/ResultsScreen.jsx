@@ -198,7 +198,7 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
       ),
 
       // ── SEMI FINALS ───────────────────────────────────────────────────────
-      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", marginBottom: 6 } },
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", marginBottom: 6 ,marginTop: 6} },
         React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#FFD700", letterSpacing: 2, textAlign: "center" } }, "SEMI-FINAL"),
         React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#FFD700", letterSpacing: 2, textAlign: "center" } }, "SEMI-FINAL")
       ),
