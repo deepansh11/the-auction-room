@@ -50,6 +50,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const syncNowRef = React.useRef(() => {});
   const lastAutoSkippedRef = React.useRef(null);
   const saveSessionRef = React.useRef(null);
+  // Tracks the last lotIdx for which we pushed a "malformed lots" fix to the server,
+  // preventing the fix itself from triggering an infinite save → sync → re-render loop.
+  const lotReassignedRef = React.useRef(-1);
 
 
   // Load face URL map from CSV so images show for all users regardless of what's in Firestore
@@ -404,8 +407,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     if (!lotOpen || lotClosing || !currentPickerKey || actionPending) return;
 
     // If this lot has no active target players (invalid assignment), and game still live,
-    // we recover instead of repeatedly auto-skipping everyone.
+    // recover once per lot — the ref guard prevents the fix itself from creating an infinite
+    // save → sync → re-render loop that floods the server with PUT requests.
     if (lotPlayers.length === 0 && activePlayers.length > 0) {
+      if (lotReassignedRef.current === lotIdx) return; // already attempted for this lot
+      lotReassignedRef.current = lotIdx;
       showToast("⚠️ Lots look malformed; reassigning players into lots to continue", "#FFAA00");
       const reassigned = normalizePlayersLot(activePlayers);
       setActivePlayers(reassigned);
@@ -687,6 +693,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         setLotOpen(false);
         setSearch("");
         setGroupFilter("ALL");
+        lotReassignedRef.current = -1; // allow malformed-lot recovery on the new lot if needed
         // The backend owns Mystery Card pools and recomputes mysteryCurrent itself whenever
         // lotIdx changes — the client never has the pool data needed to do this anymore, so we
         // just let the server-side reroll happen and pick up the result on the next sync.

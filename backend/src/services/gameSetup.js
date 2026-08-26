@@ -140,35 +140,116 @@ function generateRoundRobinFixtures(teamNames) {
   return fixtures;
 }
 
+/** Mirrors src/game/groupsFixtures.js#generateBalancedExtra. */
+function generateBalancedExtra(teams, extraPerTeam, idxOffset, label, roundOffset) {
+  const m = teams.length;
+  if (m < 2 || extraPerTeam <= 0) return [];
+
+  const hasBye = m % 2 !== 0;
+  const roster = hasBye ? [...teams, null] : [...teams];
+  const n = roster.length;
+  const half = n / 2;
+  const rounds = n - 1;
+  const fixed = roster[0];
+
+  const extra = [];
+  const counts = {};
+  teams.forEach((t) => { counts[t] = 0; });
+
+  let fixtureIdx = 0;
+  let done = false;
+
+  for (let cycle = 0; !done && cycle < 20; cycle += 1) {
+    let rotating = roster.slice(1);
+
+    for (let r = 0; r < rounds && !done; r += 1) {
+      const roundTeams = [fixed, ...rotating];
+      const swap = r % 2 === 1;
+
+      for (let i = 0; i < half; i += 1) {
+        const h = roundTeams[i];
+        const a = roundTeams[n - 1 - i];
+        if (h != null && a != null && counts[h] < extraPerTeam && counts[a] < extraPerTeam) {
+          extra.push({
+            id: `${label}-${idxOffset + fixtureIdx}`,
+            round: roundOffset + fixtureIdx + 1,
+            home: swap ? a : h,
+            away: swap ? h : a,
+            homeGoals: null,
+            awayGoals: null,
+          });
+          counts[h] += 1;
+          counts[a] += 1;
+          fixtureIdx += 1;
+        }
+      }
+
+      rotating = [rotating[rotating.length - 1], ...rotating.slice(0, -1)];
+      done = teams.every((t) => counts[t] >= extraPerTeam);
+    }
+  }
+
+  return extra;
+}
+
 /** Mirrors src/game/groupsFixtures.js#buildGroupFixtures. leg = "double" | "single". */
 function buildGroupFixtures(groups, leg = "double") {
-  const fixtures = {};
-  Object.entries(groups || {}).forEach(([label, teams]) => {
-    const single = generateRoundRobinFixtures(teams);
-    if (leg !== "double") {
-      fixtures[label] = single.map((f, i) => ({
-        id: `${label}-${i}`,
-        ...f,
-        homeGoals: null,
-        awayGoals: null,
-      }));
-      return;
-    }
-    const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
-    const doubled = [];
-    single.forEach((f, i) => {
-      doubled.push({ id: `${label}-${i * 2}`, ...f, homeGoals: null, awayGoals: null });
-      doubled.push({
-        id: `${label}-${i * 2 + 1}`,
-        round: f.round + maxRound,
-        home: f.away,
-        away: f.home,
-        homeGoals: null,
-        awayGoals: null,
-      });
-    });
-    fixtures[label] = doubled;
+  const allSizes = Object.values(groups || {}).map((t) => (t || []).filter(Boolean).length);
+  const maxSize = allSizes.length > 0 ? Math.max(...allSizes) : 0;
+  const legFactor = leg === "double" ? 2 : 1;
+  let targetPerTeam = legFactor * Math.max(maxSize - 1, 0);
+
+  const hasOddGroupWithOddExtra = allSizes.some((m) => {
+    if (m % 2 === 0) return false;
+    const extra = targetPerTeam - legFactor * Math.max(m - 1, 0);
+    return extra > 0 && extra % 2 !== 0;
   });
+  if (hasOddGroupWithOddExtra) targetPerTeam += 1;
+
+  const fixtures = {};
+
+  Object.entries(groups || {}).forEach(([label, teams]) => {
+    const cleanTeams = (teams || []).filter(Boolean);
+    if (cleanTeams.length < 2) { fixtures[label] = []; return; }
+
+    const single = generateRoundRobinFixtures(cleanTeams);
+    const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
+
+    const base = [];
+    if (leg === "double") {
+      single.forEach((f, i) => {
+        base.push({ id: `${label}-${i * 2}`, ...f, homeGoals: null, awayGoals: null });
+        base.push({
+          id: `${label}-${i * 2 + 1}`,
+          round: f.round + maxRound,
+          home: f.away,
+          away: f.home,
+          homeGoals: null,
+          awayGoals: null,
+        });
+      });
+    } else {
+      single.forEach((f, i) => {
+        base.push({ id: `${label}-${i}`, ...f, homeGoals: null, awayGoals: null });
+      });
+    }
+
+    const currentPerTeam = legFactor * (cleanTeams.length - 1);
+    let extraPerTeam = targetPerTeam - currentPerTeam;
+
+    if (cleanTeams.length % 2 !== 0 && extraPerTeam % 2 !== 0) {
+      extraPerTeam += 1;
+    }
+
+    if (extraPerTeam > 0) {
+      const roundOffset = leg === "double" ? maxRound * 2 : maxRound;
+      const extra = generateBalancedExtra(cleanTeams, extraPerTeam, base.length, label, roundOffset);
+      fixtures[label] = [...base, ...extra];
+    } else {
+      fixtures[label] = base;
+    }
+  });
+
   return fixtures;
 }
 

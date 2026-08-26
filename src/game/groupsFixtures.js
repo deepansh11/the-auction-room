@@ -59,39 +59,144 @@ export function generateRoundRobinFixtures(teamNames) {
 }
 
 /**
- * Build fixtures for every group at once.
- * leg = "double" (default) generates both home + away legs for every pair.
- * leg = "single" generates one match per pair (classic round-robin).
+ * Generate extra balanced fixtures so that every team in `teams` plays exactly
+ * `extraPerTeam` additional matches. Uses the circle-method rotation and greedily
+ * adds a fixture only when both teams still need more matches, cycling through
+ * rounds until the target is met for every team.
+ *
+ * Precondition: teams.length * extraPerTeam must be even (caller ensures this).
+ */
+function generateBalancedExtra(teams, extraPerTeam, idxOffset, label, roundOffset) {
+  const m = teams.length;
+  if (m < 2 || extraPerTeam <= 0) return [];
+
+  const hasBye = m % 2 !== 0;
+  const roster = hasBye ? [...teams, null] : [...teams];
+  const n = roster.length;
+  const half = n / 2;
+  const rounds = n - 1;
+  const fixed = roster[0];
+
+  const extra = [];
+  const counts = {};
+  teams.forEach((t) => { counts[t] = 0; });
+
+  let fixtureIdx = 0;
+  let done = false;
+
+  for (let cycle = 0; !done && cycle < 20; cycle += 1) {
+    let rotating = roster.slice(1);
+
+    for (let r = 0; r < rounds && !done; r += 1) {
+      const roundTeams = [fixed, ...rotating];
+      const swap = r % 2 === 1;
+
+      for (let i = 0; i < half; i += 1) {
+        const h = roundTeams[i];
+        const a = roundTeams[n - 1 - i];
+        if (h != null && a != null && counts[h] < extraPerTeam && counts[a] < extraPerTeam) {
+          extra.push({
+            id: `${label}-${idxOffset + fixtureIdx}`,
+            round: roundOffset + fixtureIdx + 1,
+            home: swap ? a : h,
+            away: swap ? h : a,
+            homeGoals: null,
+            awayGoals: null,
+          });
+          counts[h] += 1;
+          counts[a] += 1;
+          fixtureIdx += 1;
+        }
+      }
+
+      rotating = [rotating[rotating.length - 1], ...rotating.slice(0, -1)];
+      done = teams.every((t) => counts[t] >= extraPerTeam);
+    }
+  }
+
+  return extra;
+}
+
+/**
+ * Build fixtures for every group at once, equalising match counts across groups.
+ *
+ * leg = "double" (default) — home + away leg for every pair.
+ * leg = "single"           — one match per pair.
+ *
+ * When groups differ in size (e.g. 9 players → groups of 5 and 4), teams in
+ * smaller groups receive extra "padding" fixtures so every team plays the same
+ * number of matches as teams in the largest group.
+ *
+ * Edge case: if a group has an odd number of teams and the required extras are
+ * odd (making equal distribution impossible), we round up by 1 so the total is
+ * always an even number of fixtures.
+ *
  * Returns { A: [{id, round, home, away, homeGoals, awayGoals}], ... }.
  */
 export function buildGroupFixtures(groups, leg = "double") {
-  const fixtures = {};
-  Object.entries(groups || {}).forEach(([label, teams]) => {
-    const single = generateRoundRobinFixtures(teams);
-    if (leg !== "double") {
-      fixtures[label] = single.map((f, i) => ({
-        id: `${label}-${i}`,
-        ...f,
-        homeGoals: null,
-        awayGoals: null,
-      }));
-      return;
-    }
-    const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
-    const doubled = [];
-    single.forEach((f, i) => {
-      doubled.push({ id: `${label}-${i * 2}`, ...f, homeGoals: null, awayGoals: null });
-      doubled.push({
-        id: `${label}-${i * 2 + 1}`,
-        round: f.round + maxRound,
-        home: f.away,
-        away: f.home,
-        homeGoals: null,
-        awayGoals: null,
-      });
-    });
-    fixtures[label] = doubled;
+  const allSizes = Object.values(groups || {}).map((t) => (t || []).filter(Boolean).length);
+  const maxSize = allSizes.length > 0 ? Math.max(...allSizes) : 0;
+  const legFactor = leg === "double" ? 2 : 1;
+  let targetPerTeam = legFactor * Math.max(maxSize - 1, 0);
+
+  // If any odd-sized group would receive an odd number of extra fixtures, bump the
+  // global target by 1 so every group reaches the same (now even-remainder) value.
+  // This keeps all teams equal without over-shooting anyone.
+  const hasOddGroupWithOddExtra = allSizes.some((m) => {
+    if (m % 2 === 0) return false;
+    const extra = targetPerTeam - legFactor * Math.max(m - 1, 0);
+    return extra > 0 && extra % 2 !== 0;
   });
+  if (hasOddGroupWithOddExtra) targetPerTeam += 1;
+
+  const fixtures = {};
+
+  Object.entries(groups || {}).forEach(([label, teams]) => {
+    const cleanTeams = (teams || []).filter(Boolean);
+    if (cleanTeams.length < 2) { fixtures[label] = []; return; }
+
+    const single = generateRoundRobinFixtures(cleanTeams);
+    const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
+
+    // Build the base fixtures (single or double leg).
+    const base = [];
+    if (leg === "double") {
+      single.forEach((f, i) => {
+        base.push({ id: `${label}-${i * 2}`, ...f, homeGoals: null, awayGoals: null });
+        base.push({
+          id: `${label}-${i * 2 + 1}`,
+          round: f.round + maxRound,
+          home: f.away,
+          away: f.home,
+          homeGoals: null,
+          awayGoals: null,
+        });
+      });
+    } else {
+      single.forEach((f, i) => {
+        base.push({ id: `${label}-${i}`, ...f, homeGoals: null, awayGoals: null });
+      });
+    }
+
+    // Equalise: add extra fixtures so this group's teams reach targetPerTeam.
+    const currentPerTeam = legFactor * (cleanTeams.length - 1);
+    let extraPerTeam = targetPerTeam - currentPerTeam;
+
+    // For odd-sized groups, m * extraPerTeam must be even.
+    // m odd + extraPerTeam odd → product is odd → impossible → round up by 1.
+    if (cleanTeams.length % 2 !== 0 && extraPerTeam % 2 !== 0) {
+      extraPerTeam += 1;
+    }
+
+    if (extraPerTeam > 0) {
+      const roundOffset = leg === "double" ? maxRound * 2 : maxRound;
+      const extra = generateBalancedExtra(cleanTeams, extraPerTeam, base.length, label, roundOffset);
+      fixtures[label] = [...base, ...extra];
+    } else {
+      fixtures[label] = base;
+    }
+  });
+
   return fixtures;
 }
 
