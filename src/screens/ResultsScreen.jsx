@@ -52,10 +52,14 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
 
   function getWinner(matchId, homeTeam, awayTeam) {
     const sc = knockoutScores[matchId] || {};
-    const hg = Number(sc.homeGoals);
-    const ag = Number(sc.awayGoals);
-    if (!Number.isFinite(hg) || !Number.isFinite(ag)) return null;
-    return hg > ag ? homeTeam : ag > hg ? awayTeam : null;
+    const h1 = Number(sc.homeGoals), a1 = Number(sc.awayGoals);
+    const h2 = Number(sc.leg2HomeGoals), a2 = Number(sc.leg2AwayGoals);
+    if (!Number.isFinite(h1) || !Number.isFinite(a1) || !Number.isFinite(h2) || !Number.isFinite(a2)) return null;
+    // homeTeam aggregate = leg1 home goals + leg2 away goals
+    // awayTeam aggregate = leg1 away goals + leg2 home goals
+    const homeAgg = h1 + a2;
+    const awayAgg = a1 + h2;
+    return homeAgg > awayAgg ? homeTeam : awayAgg > homeAgg ? awayTeam : null;
   }
 
   function ScoreInput({ matchId, side, value }) {
@@ -74,7 +78,7 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
     });
   }
 
-  // Renders a single fixture box (used for QF, SF, and Final rounds).
+  // Renders a two-legged fixture box (used for QF, SF, and Final rounds).
   // homeKey/awayKey may be seeds ("1A") or winner refs ("W:QF-0").
   // A slot is TBD when resolveTeam() still returns a "W:..." string (no winner yet).
   function MatchBox({ matchId, homeKey, awayKey, label, minWidth = 200 }) {
@@ -84,14 +88,21 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
     const awayTBD = !away || away.startsWith("W:");
     const sc = knockoutScores[matchId] || {};
     const winner = (!homeTBD && !awayTBD) ? getWinner(matchId, home, away) : null;
+    const h1 = Number(sc.homeGoals), a1 = Number(sc.awayGoals);
+    const h2 = Number(sc.leg2HomeGoals), a2 = Number(sc.leg2AwayGoals);
+    const hasAgg = !homeTBD && !awayTBD && Number.isFinite(h1) && Number.isFinite(a1) && Number.isFinite(h2) && Number.isFinite(a2);
     const rowStyle = (team, tbd) => ({
       display: "flex", alignItems: "center", gap: 8,
       background: !tbd && winner === team ? "#FFD70015" : "#0d0f16",
       border: `1px solid ${!tbd && winner === team ? "#FFD70044" : "#1e2028"}`,
-      borderRadius: 6, padding: "5px 8px", marginBottom: 3,
+      borderRadius: 6, padding: "5px 8px", marginBottom: 2,
     });
+    const legLabel = (text) => React.createElement("div", {
+      style: { fontFamily: "'Bebas Neue'", fontSize: 8, color: "#444", letterSpacing: 2, marginBottom: 2, marginTop: 4 }
+    }, text);
     return React.createElement("div", { style: { minWidth } },
       label && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#555", letterSpacing: 2, marginBottom: 4 } }, label),
+      legLabel("LEG 1"),
       React.createElement("div", { style: rowStyle(home, homeTBD) },
         React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
           color: homeTBD ? "#333" : winner === home ? "#FFD700" : "#ccc",
@@ -106,7 +117,24 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
           awayTBD ? "TBD" : away),
         !awayTBD && React.createElement(ScoreInput, { matchId, side: "awayGoals", value: sc.awayGoals })
       ),
-      winner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#FFD700", marginTop: 3, letterSpacing: 1 } }, `→ ${winner} advances`)
+      legLabel("LEG 2"),
+      React.createElement("div", { style: rowStyle(away, awayTBD) },
+        React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+          color: awayTBD ? "#333" : winner === away ? "#FFD700" : "#ccc",
+          fontWeight: winner === away ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+          awayTBD ? "TBD" : away),
+        !awayTBD && React.createElement(ScoreInput, { matchId, side: "leg2HomeGoals", value: sc.leg2HomeGoals })
+      ),
+      React.createElement("div", { style: rowStyle(home, homeTBD) },
+        React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+          color: homeTBD ? "#333" : winner === home ? "#FFD700" : "#ccc",
+          fontWeight: winner === home ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+          homeTBD ? "TBD" : home),
+        !homeTBD && React.createElement(ScoreInput, { matchId, side: "leg2AwayGoals", value: sc.leg2AwayGoals })
+      ),
+      hasAgg && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#888", marginTop: 4, letterSpacing: 1, textAlign: "center" } },
+        `AGG: ${home} ${h1 + a2} – ${a1 + h2} ${away}`),
+      winner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#FFD700", marginTop: 2, letterSpacing: 1 } }, `→ ${winner} advances`)
     );
   }
 
@@ -129,6 +157,9 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
   const finalAwayTBD = !finalAway || finalAway.startsWith("W:");
   const finalSc = knockoutScores["FINAL"] || {};
   const finalWinner = (!finalHomeTBD && !finalAwayTBD) ? getWinner("FINAL", finalHome, finalAway) : null;
+  const fh1 = Number(finalSc.homeGoals), fa1 = Number(finalSc.awayGoals);
+  const fh2 = Number(finalSc.leg2HomeGoals), fa2 = Number(finalSc.leg2AwayGoals);
+  const finalHasAgg = !finalHomeTBD && !finalAwayTBD && Number.isFinite(fh1) && Number.isFinite(fa1) && Number.isFinite(fh2) && Number.isFinite(fa2);
   const finalRowStyle = (team, tbd) => ({
     display: "flex", alignItems: "center", gap: 6, marginBottom: 4,
     background: !tbd && finalWinner === team ? "#FFD70015" : "transparent",
@@ -139,19 +170,38 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
     React.createElement("img", { src: "/world-cup-trophy.png", alt: "World Cup", style: { width: 80, height: "auto", filter: "drop-shadow(0 0 12px #FFD700aa)" } }),
     React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 13, color: "#FFD700", letterSpacing: 2, marginBottom: 4 } }, "FINAL"),
     React.createElement("div", { style: { background: "#0d0f16", border: "1px solid #FFD70044", borderRadius: 8, padding: "8px 12px", width: "100%" } },
-      [
-        { team: finalHome, tbd: finalHomeTBD, side: "homeGoals" },
-        { team: finalAway, tbd: finalAwayTBD, side: "awayGoals" },
-      ].map(({ team, tbd, side }) =>
-        React.createElement("div", { key: side, style: finalRowStyle(team, tbd) },
-          React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
-            color: tbd ? "#333" : finalWinner === team ? "#FFD700" : "#ccc",
-            fontWeight: finalWinner === team ? 700 : 400,
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-            tbd ? "TBD" : team),
-          !tbd && React.createElement(ScoreInput, { matchId: "FINAL", side, value: finalSc[side] })
-        )
-      )
+      React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 8, color: "#555", letterSpacing: 2, marginBottom: 2 } }, "LEG 1"),
+      React.createElement("div", { style: finalRowStyle(finalHome, finalHomeTBD) },
+        React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+          color: finalHomeTBD ? "#333" : finalWinner === finalHome ? "#FFD700" : "#ccc",
+          fontWeight: finalWinner === finalHome ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+          finalHomeTBD ? "TBD" : finalHome),
+        !finalHomeTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "homeGoals", value: finalSc.homeGoals })
+      ),
+      React.createElement("div", { style: finalRowStyle(finalAway, finalAwayTBD) },
+        React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+          color: finalAwayTBD ? "#333" : finalWinner === finalAway ? "#FFD700" : "#ccc",
+          fontWeight: finalWinner === finalAway ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+          finalAwayTBD ? "TBD" : finalAway),
+        !finalAwayTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "awayGoals", value: finalSc.awayGoals })
+      ),
+      React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 8, color: "#555", letterSpacing: 2, marginBottom: 2, marginTop: 6 } }, "LEG 2"),
+      React.createElement("div", { style: finalRowStyle(finalAway, finalAwayTBD) },
+        React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+          color: finalAwayTBD ? "#333" : finalWinner === finalAway ? "#FFD700" : "#ccc",
+          fontWeight: finalWinner === finalAway ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+          finalAwayTBD ? "TBD" : finalAway),
+        !finalAwayTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "leg2HomeGoals", value: finalSc.leg2HomeGoals })
+      ),
+      React.createElement("div", { style: finalRowStyle(finalHome, finalHomeTBD) },
+        React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+          color: finalHomeTBD ? "#333" : finalWinner === finalHome ? "#FFD700" : "#ccc",
+          fontWeight: finalWinner === finalHome ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+          finalHomeTBD ? "TBD" : finalHome),
+        !finalHomeTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "leg2AwayGoals", value: finalSc.leg2AwayGoals })
+      ),
+      finalHasAgg && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#888", marginTop: 6, letterSpacing: 1, textAlign: "center" } },
+        `AGG: ${finalHome} ${fh1 + fa2} – ${fa1 + fh2} ${finalAway}`)
     ),
     finalWinner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 14, color: "#FFD700", letterSpacing: 2, textAlign: "center", textShadow: "0 0 16px #FFD700aa" } }, `🏆 ${finalWinner}`)
   );
@@ -228,19 +278,42 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
         React.createElement("img", { src: "/world-cup-trophy.png", alt: "World Cup",
           style: { width: 64, height: "auto", filter: "drop-shadow(0 0 10px #FFD700aa)" } }),
         React.createElement("div", { style: { background: "#0d0f16", border: "1px solid #FFD70044", borderRadius: 8, padding: "8px 12px", minWidth: 240 } },
-          [
-            { team: finalHome, tbd: finalHomeTBD, side: "homeGoals" },
-            { team: finalAway, tbd: finalAwayTBD, side: "awayGoals" },
-          ].map(({ team, tbd, side }) =>
-            React.createElement("div", { key: side, style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
-              React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
-                color: tbd ? "#333" : finalWinner === team ? "#FFD700" : "#ccc",
-                fontWeight: finalWinner === team ? 700 : 400,
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-                tbd ? "TBD" : team),
-              !tbd && React.createElement(ScoreInput, { matchId: "FINAL", side, value: finalSc[side] })
-            )
-          )
+          React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 8, color: "#555", letterSpacing: 2, marginBottom: 2 } }, "LEG 1"),
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
+            React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+              color: finalHomeTBD ? "#333" : finalWinner === finalHome ? "#FFD700" : "#ccc",
+              fontWeight: finalWinner === finalHome ? 700 : 400,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              finalHomeTBD ? "TBD" : finalHome),
+            !finalHomeTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "homeGoals", value: finalSc.homeGoals })
+          ),
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
+            React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+              color: finalAwayTBD ? "#333" : finalWinner === finalAway ? "#FFD700" : "#ccc",
+              fontWeight: finalWinner === finalAway ? 700 : 400,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              finalAwayTBD ? "TBD" : finalAway),
+            !finalAwayTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "awayGoals", value: finalSc.awayGoals })
+          ),
+          React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 8, color: "#555", letterSpacing: 2, marginBottom: 2, marginTop: 6 } }, "LEG 2"),
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
+            React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+              color: finalAwayTBD ? "#333" : finalWinner === finalAway ? "#FFD700" : "#ccc",
+              fontWeight: finalWinner === finalAway ? 700 : 400,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              finalAwayTBD ? "TBD" : finalAway),
+            !finalAwayTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "leg2HomeGoals", value: finalSc.leg2HomeGoals })
+          ),
+          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 } },
+            React.createElement("span", { style: { flex: 1, fontFamily: "'Exo 2'", fontSize: 12,
+              color: finalHomeTBD ? "#333" : finalWinner === finalHome ? "#FFD700" : "#ccc",
+              fontWeight: finalWinner === finalHome ? 700 : 400,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              finalHomeTBD ? "TBD" : finalHome),
+            !finalHomeTBD && React.createElement(ScoreInput, { matchId: "FINAL", side: "leg2AwayGoals", value: finalSc.leg2AwayGoals })
+          ),
+          finalHasAgg && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#888", marginTop: 6, letterSpacing: 1, textAlign: "center" } },
+            `AGG: ${finalHome} ${fh1 + fa2} – ${fa1 + fh2} ${finalAway}`)
         ),
         finalWinner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 15, color: "#FFD700",
           letterSpacing: 2, textAlign: "center", textShadow: "0 0 16px #FFD700aa" } }, `🏆 ${finalWinner}`)
