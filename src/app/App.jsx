@@ -382,7 +382,7 @@ export default function App() {
         groupsEnabled: Boolean(session?.groupsEnabled),
         groups: session?.groups || {},
         fixtures: session?.fixtures || {},
-        knockoutFormat: session?.knockoutFormat || "semiFinal",
+        knockoutFormat: session?.knockoutFormat || "quarterFinal",
         onRefresh: () => {},
       })
     )

@@ -210,7 +210,7 @@ export function buildGroupFixtures(groups, leg = "double") {
  *
  * Returns an array of { id, round, homeKey, awayKey } where keys are like "1A" / "2B".
  */
-export function computeKnockoutMatchups(groupLabels, knockoutFormat = "semiFinal") {
+export function computeKnockoutMatchups(groupLabels, knockoutFormat = "quarterFinal") {
   const labels = (groupLabels || []).filter(Boolean).sort();
   const n = labels.length;
   if (n < 2) return [];

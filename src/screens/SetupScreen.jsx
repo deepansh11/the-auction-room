@@ -23,7 +23,7 @@ export function SetupScreen({ user, onStart }) {
   const [groupsEnabled, setGroupsEnabled] = React.useState(true);
   const [groupCount, setGroupCount] = React.useState(2);
   const [fixtureLeg, setFixtureLeg] = React.useState("single");
-  const [knockoutFormat, setKnockoutFormat] = React.useState("semiFinal");
+  const [knockoutFormat, setKnockoutFormat] = React.useState("quarterFinal");
   const [showShare, setShowShare] = React.useState(false);
   const [sessionData, setSessionData] = React.useState(null);
   const [copyStatus, setCopyStatus] = React.useState("");

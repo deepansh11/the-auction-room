@@ -9,7 +9,7 @@ import { apiSaveAuctionPoints, apiSaveFixtures } from "../lib/api.js";
 import { trackEvent } from "../lib/analytics.js";
 
 // ── World Cup Knockout Bracket ────────────────────────────────────────────────
-function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, isHost, onScoreChange, onPublish, publishing, published, onRefresh, refreshing, knockoutFormat="semiFinal" }) {
+function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, isHost, onScoreChange, onPublish, publishing, published, onRefresh, refreshing, knockoutFormat="quarterFinal" }) {
   const groupLabels = Object.keys(groups || {}).sort();
   const matchups = computeKnockoutMatchups(groupLabels, knockoutFormat);
   const isQF = knockoutFormat === "quarterFinal";
@@ -309,7 +309,7 @@ function buildNameMap(participants, groups) {
 
 export function ResultsScreen({
   participants, wishlists, players=[], tiers=TIERS, selectedName, auctionResultId, user, host="", onRefresh,
-  groupsEnabled=false, groups={}, fixtures={}, knockoutFormat="semiFinal",
+  groupsEnabled=false, groups={}, fixtures={}, knockoutFormat="quarterFinal",
 }) {
   const isHost = Boolean(host && user?.username && host === user.username);
   const [view, setView] = React.useState("squads");
