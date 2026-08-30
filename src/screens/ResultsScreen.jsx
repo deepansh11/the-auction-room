@@ -68,7 +68,7 @@ function KnockoutBracket({ groups, fixturesState, knockoutScores, nameMap={}, is
         style: { width: 34, background: "#05070d", border: "1px solid #1e2028", borderRadius: 4,
           color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 13, textAlign: "center", padding: "2px 0",
           display: "flex", alignItems: "center", justifyContent: "center", minHeight: 24 }
-      }, 0);
+      }, value ?? "–");
     }
     return React.createElement("input", {
       type: "number", min: 0, value: value ?? "",
@@ -603,7 +603,7 @@ export function ResultsScreen({
                               })
                             : React.createElement("div", { style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
                                 color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0",
-                                display:"flex", alignItems:"center", justifyContent:"center", minHeight:20 } }, 0),
+                                display:"flex", alignItems:"center", justifyContent:"center", minHeight:20 } }, f.homeGoals ?? "–"),
                           React.createElement("span", { style:{ color:"#444", textAlign:"center", fontSize:11 } }, "–"),
                           isHost
                             ? React.createElement("input", {
@@ -614,7 +614,7 @@ export function ResultsScreen({
                               })
                             : React.createElement("div", { style:{ width:40, background:"#05070d", border:"1px solid #1e2028", borderRadius:5,
                                 color:"#FFD700", fontFamily:"'Bebas Neue'", fontSize:13, textAlign:"center", padding:"3px 0",
-                                display:"flex", alignItems:"center", justifyContent:"center", minHeight:20 } }, 0),
+                                display:"flex", alignItems:"center", justifyContent:"center", minHeight:20 } }, f.awayGoals ?? "–"),
                           React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:12, color:"#ccc", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, f.away)
                         )
                       ),
