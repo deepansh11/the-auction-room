@@ -221,30 +221,16 @@ export function computeKnockoutMatchups(groupLabels, knockoutFormat = "quarterFi
   }
 
   if (knockoutFormat === "quarterFinal") {
-    // World Cup crossover: top 4 from each group (designed for 2 groups).
-    // Left bracket half: 1A v 4B, 2A v 3B  →  SF-0
-    // Right bracket half: 1B v 4A, 2B v 3A →  SF-1
-    const qualPerGroup = 4; // fixed for 2-group QF format
-    const matchups = [];
-    const half = Math.ceil(n / 2);
-    for (let i = 0; i < half; i++) {
-      const g1 = labels[i];
-      const g2 = labels[n - 1 - i];
-      if (g1 === g2) continue;
-      // Left bracket: top seeds of g1 vs bottom seeds of g2
-      for (let q = 0; q < qualPerGroup / 2; q++) {
-        const top = q + 1;
-        const bot = qualPerGroup - q;
-        matchups.push({ id: `QF-${matchups.length}`, round: "QF", homeKey: `${top}${g1}`, awayKey: `${bot}${g2}` });
-      }
-      // Right bracket: top seeds of g2 vs bottom seeds of g1
-      for (let q = 0; q < qualPerGroup / 2; q++) {
-        const top = q + 1;
-        const bot = qualPerGroup - q;
-        matchups.push({ id: `QF-${matchups.length}`, round: "QF", homeKey: `${top}${g2}`, awayKey: `${bot}${g1}` });
-      }
-    }
-    return matchups;
+    // World Cup crossover (designed for 2 groups A and B):
+    // Left bracket:  QF-0: 1A v 4B, QF-1: 2B v 3A  →  SF-0
+    // Right bracket: QF-2: 1B v 4A, QF-3: 2A v 3B  →  SF-1
+    const [a, b] = labels; // sorted, so a < b alphabetically
+    return [
+      { id: "QF-0", round: "QF", homeKey: `1${a}`, awayKey: `4${b}` },
+      { id: "QF-1", round: "QF", homeKey: `2${b}`, awayKey: `3${a}` },
+      { id: "QF-2", round: "QF", homeKey: `1${b}`, awayKey: `4${a}` },
+      { id: "QF-3", round: "QF", homeKey: `2${a}`, awayKey: `3${b}` },
+    ];
   }
 
   // "semiFinal" — backward-compat R16-* IDs so stored knockoutScores still resolve.
