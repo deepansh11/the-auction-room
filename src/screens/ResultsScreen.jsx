@@ -428,8 +428,13 @@ function getBaseRoundCount(teamCount) {
   return teamCount % 2 === 0 ? teamCount - 1 : teamCount;
 }
 
+function hasRecordedScoreValue(value) {
+  if (value === null || value === undefined || value === "") return false;
+  return Number.isFinite(Number(value));
+}
+
 function isPlayedFixture(fixture) {
-  return Number.isFinite(Number(fixture?.homeGoals)) && Number.isFinite(Number(fixture?.awayGoals));
+  return hasRecordedScoreValue(fixture?.homeGoals) && hasRecordedScoreValue(fixture?.awayGoals);
 }
 
 function formatRelativeTime(timestamp) {
@@ -872,8 +877,10 @@ export function ResultsScreen({
             ...fixture,
             [side === "home" ? "homeGoals" : "awayGoals"]: value,
           };
-          if (Number.isFinite(Number(updatedFixture.homeGoals)) && Number.isFinite(Number(updatedFixture.awayGoals))) {
+          if (isPlayedFixture(updatedFixture)) {
             updatedFixture.scoreUpdatedAt = Date.now();
+          } else {
+            updatedFixture.scoreUpdatedAt = null;
           }
           return updatedFixture;
         }),

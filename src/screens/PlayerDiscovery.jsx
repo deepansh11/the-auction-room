@@ -21,7 +21,9 @@ function flattenLeagueFixtures(fixtures) {
 }
 
 function isPlayedFixture(fixture) {
-  return Number.isFinite(Number(fixture?.homeGoals)) && Number.isFinite(Number(fixture?.awayGoals));
+  if (fixture?.homeGoals === null || fixture?.homeGoals === undefined || fixture?.homeGoals === "") return false;
+  if (fixture?.awayGoals === null || fixture?.awayGoals === undefined || fixture?.awayGoals === "") return false;
+  return Number.isFinite(Number(fixture.homeGoals)) && Number.isFinite(Number(fixture.awayGoals));
 }
 
 function getLatestFixtureActivity(result) {
@@ -69,6 +71,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
   const [participantPoints, setParticipantPoints] = React.useState({});
   const [savingPoints, setSavingPoints] = React.useState(false);
   const [deletingResultId, setDeletingResultId] = React.useState("");
+  const [deleteConfirmResult, setDeleteConfirmResult] = React.useState(null);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [restoringBackup, setRestoringBackup] = React.useState(false);
   const backupInputRef = React.useRef(null);
@@ -286,7 +289,17 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
   const handleDeleteResult = async (result) => {
     const resultId = String(result?.sessionId || result?.id || "");
     if (!resultId || deletingResultId) return;
-    if (!window.confirm(`Delete "${result?.name || "this past game"}"? This cannot be undone.`)) return;
+    setDeleteConfirmResult(result);
+  };
+
+  const handleDeleteConfirmClose = () => {
+    if (deletingResultId) return;
+    setDeleteConfirmResult(null);
+  };
+
+  const handleDeleteConfirm = async () => {
+    const resultId = String(deleteConfirmResult?.sessionId || deleteConfirmResult?.id || "");
+    if (!resultId || deletingResultId) return;
 
     setDeletingResultId(resultId);
     try {
@@ -298,6 +311,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       setSessions(updatedSessions.filter((session) => session.status !== "complete"));
       setPastResults(Array.isArray(updatedResults) ? updatedResults : []);
       if (expandedResultId === resultId) setExpandedResultId("");
+      setDeleteConfirmResult(null);
     } catch (err) {
       alert("Failed to delete game: " + err.message);
     } finally {
@@ -455,6 +469,47 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       onChange: handleBackupSelected,
       style: { display: "none" },
     }),
+    deleteConfirmResult && React.createElement("div", {
+      style: {
+        position: "fixed",
+        inset: 0,
+        background: "#00000088",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1001,
+        padding: 18,
+      }
+    },
+      React.createElement("div", {
+        style: {
+          background: "#0a0c12",
+          border: "1px solid #40202d",
+          borderRadius: 16,
+          padding: 24,
+          width: "100%",
+          maxWidth: 420,
+          boxShadow: "0 24px 70px rgba(0,0,0,.45)",
+        }
+      },
+        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#ff8aa9", letterSpacing: 2, marginBottom: 10 } }, "DELETE PAST RESULT"),
+        React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#8ea0ba", lineHeight: 1.6, marginBottom: 18 } },
+          `Delete "${deleteConfirmResult?.name || "this past game"}"? This cannot be undone.`
+        ),
+        React.createElement("div", { style: { display: "flex", gap: 10 } },
+          React.createElement("button", {
+            onClick: handleDeleteConfirmClose,
+            disabled: Boolean(deletingResultId),
+            style: { ...BTN.ghost, flex: 1, opacity: deletingResultId ? 0.6 : 1 }
+          }, "CANCEL"),
+          React.createElement("button", {
+            onClick: handleDeleteConfirm,
+            disabled: Boolean(deletingResultId),
+            style: { ...BTN.danger, flex: 1, opacity: deletingResultId ? 0.6 : 1 }
+          }, deletingResultId ? "DELETING…" : "DELETE")
+        )
+      )
+    ),
     pointsModal && React.createElement("div", {
       style: {
         position: "fixed",
