@@ -7,7 +7,7 @@ import {
   apiSaveBallonDorSubmission,
   apiSavePublicBallonDorSubmission,
 } from "../lib/api.js";
-import { buildBallonDorRanking, extractFeaturedPlayerCard, mergePerformanceCaptureWithRoster, normalizePlayerKey, parsePerformanceCaptureText, validatePerformanceCaptureDraft } from "../utils/performanceCapture.js";
+import { buildBallonDorRanking, extractFeaturedPlayerCard, mergePerformanceCaptureWithRoster, normalizePlayerKey, parsePerformanceCaptureText, scorePerformanceCaptureRoster, validatePerformanceCaptureDraft } from "../utils/performanceCapture.js";
 import { generateBallonDorUploadLink } from "../utils/roomUtils.js";
 
 function emptyPlayerRow(index) {
@@ -351,6 +351,24 @@ export function BallonDorPanel({
     [selectedParticipant]
   );
 
+  const pickBestParticipantForCapture = React.useCallback((rows) => {
+    const baseRows = Array.isArray(rows) ? rows : [];
+    let bestParticipant = null;
+    let bestScore = 0;
+
+    resolvedParticipants.forEach((participant) => {
+      const participantRoster = Array.isArray(participant?.squad) ? participant.squad : [];
+      if (participantRoster.length === 0) return;
+      const score = scorePerformanceCaptureRoster(baseRows, participantRoster);
+      if (score > bestScore) {
+        bestScore = score;
+        bestParticipant = participant;
+      }
+    });
+
+    return { bestParticipant, bestScore };
+  }, [resolvedParticipants]);
+
   React.useEffect(() => {
     if (!isPublicUpload) return undefined;
     let cancelled = false;
@@ -467,8 +485,18 @@ export function BallonDorPanel({
       const scanResult = await scanRosterRegion(file);
       const rosterText = String(scanResult?.text || "").trim();
       const parsed = scanResult?.parsed || parsePerformanceCaptureText(rosterText);
-      const rosterAwareDraft = selectedParticipantRoster.length > 0
-        ? mergePerformanceCaptureWithRoster(parsed.players, selectedParticipantRoster)
+      const selectedRosterScore = selectedParticipantRoster.length > 0
+        ? scorePerformanceCaptureRoster(parsed.players, selectedParticipantRoster)
+        : 0;
+      const bestMatch = pickBestParticipantForCapture(parsed.players);
+      const shouldAutoSwitchTeam = bestMatch.bestParticipant
+        && bestMatch.bestParticipant.name !== mappedParticipantName
+        && selectedRosterScore === 0
+        && bestMatch.bestScore > 0;
+      const activeParticipant = shouldAutoSwitchTeam ? bestMatch.bestParticipant : selectedParticipant;
+      const activeRoster = Array.isArray(activeParticipant?.squad) ? activeParticipant.squad : [];
+      const rosterAwareDraft = activeRoster.length > 0
+        ? mergePerformanceCaptureWithRoster(parsed.players, activeRoster)
         : { players: parsed.players || [], rosterFallbackPlayerCount: 0, matchedRosterPlayerCount: 0, unmatchedOcrPlayerCount: 0 };
       const nextDraft = {
         ...parsed,
@@ -481,10 +509,13 @@ export function BallonDorPanel({
         throw new Error("The scan took too long or could not read text from this image.");
       }
       setDraft(nextDraft.players.length > 0 ? nextDraft : { ...nextDraft, players: [emptyPlayerRow(1)] });
+      if (shouldAutoSwitchTeam) {
+        setMappedParticipantName(bestMatch.bestParticipant.name);
+      }
       if (nextDraft.players.length === 0) {
         setError("The scan finished, but it could not detect enough player rows. You can still fill them in manually.");
       } else if (nextDraft.rosterFallbackPlayerCount > 0) {
-        setSuccessMessage(`Matched ${nextDraft.matchedRosterPlayerCount} player row(s) from OCR and filled ${nextDraft.rosterFallbackPlayerCount} roster row(s) with default stats for review.`);
+        setSuccessMessage(`${shouldAutoSwitchTeam ? `Auto-selected ${bestMatch.bestParticipant.name}. ` : ""}Matched ${nextDraft.matchedRosterPlayerCount} player row(s) from OCR and filled ${nextDraft.rosterFallbackPlayerCount} roster row(s) with default stats for review.`);
       } else if (parsed.missingVisiblePlayerCount > 0) {
         setSuccessMessage(`Scanned ${parsed.players.length - parsed.missingVisiblePlayerCount} player row(s). Added ${parsed.missingVisiblePlayerCount} blank row(s) so you can finish the missing visible players manually.`);
       } else {

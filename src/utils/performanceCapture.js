@@ -64,43 +64,80 @@ function initialsForTokens(tokens = []) {
   return tokens.map((token) => token[0] || "").join("");
 }
 
-function isCompatiblePlayerKey(left = "", right = "") {
+function getPlayerNameMatchScore(left = "", right = "") {
   const a = normalizePlayerKey(left);
   const b = normalizePlayerKey(right);
-  if (!a || !b) return false;
-  if (a === b) return true;
+  if (!a || !b) return 0;
+  if (a === b) return 100;
 
   const leftTokens = splitComparisonName(left);
   const rightTokens = splitComparisonName(right);
-  if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+  if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
 
   const leftLast = leftTokens[leftTokens.length - 1];
   const rightLast = rightTokens[rightTokens.length - 1];
-  if (!tokenMatches(leftLast, rightLast)) return false;
+  if (!tokenMatches(leftLast, rightLast)) return 0;
 
   const leftGiven = leftTokens.slice(0, -1);
   const rightGiven = rightTokens.slice(0, -1);
-  if (leftGiven.length === 0 || rightGiven.length === 0) return true;
+  if (leftGiven.length === 0 || rightGiven.length === 0) return 60;
 
   const leftInitials = initialsForTokens(leftGiven);
   const rightInitials = initialsForTokens(rightGiven);
-  if (leftInitials && rightInitials && (leftInitials === rightInitials || leftInitials.startsWith(rightInitials) || rightInitials.startsWith(leftInitials))) {
-    return true;
-  }
+  if (leftInitials && rightInitials && leftInitials === rightInitials) return 95;
+  if (leftInitials && rightInitials && (leftInitials.startsWith(rightInitials) || rightInitials.startsWith(leftInitials))) return 85;
 
   const comparedLength = Math.min(leftGiven.length, rightGiven.length);
+  let matches = 0;
   for (let index = 0; index < comparedLength; index += 1) {
-    if (!tokenMatches(leftGiven[index], rightGiven[index])) {
-      return false;
+    if (tokenMatches(leftGiven[index], rightGiven[index])) {
+      matches += 1;
+    } else {
+      break;
     }
   }
 
-  if (leftGiven.length !== rightGiven.length) {
-    const extraTokens = leftGiven.length > rightGiven.length ? leftGiven.slice(comparedLength) : rightGiven.slice(comparedLength);
-    if (extraTokens.some((token) => token.length > 1)) return false;
-  }
+  if (matches === 0) return 40;
+  const tokenScore = 40 + (matches * 10);
+  return Math.min(tokenScore, 90);
+}
 
-  return true;
+function isCompatiblePlayerKey(left = "", right = "") {
+  return getPlayerNameMatchScore(left, right) > 0;
+}
+
+export function scorePerformanceCapturePlayerMatch(left = "", right = "") {
+  return getPlayerNameMatchScore(left, right);
+}
+
+export function scorePerformanceCaptureRoster(players = [], rosterPlayers = []) {
+  const ocrRows = Array.isArray(players) ? players : [];
+  const roster = Array.isArray(rosterPlayers) ? rosterPlayers : [];
+  const usedRosterIds = new Set();
+  let score = 0;
+
+  ocrRows.forEach((ocrRow) => {
+    if (!ocrRow || !normalizeLine(ocrRow.name)) return;
+    let best = null;
+    let bestScore = 0;
+    for (const rosterPlayer of roster) {
+      const rosterName = rosterPlayer?.name || rosterPlayer?.longName || "";
+      const rosterId = rosterPlayer?.id ?? rosterPlayer?.player_id ?? rosterPlayer?.name;
+      if (!rosterName || usedRosterIds.has(rosterId)) continue;
+      const candidateScore = getPlayerNameMatchScore(ocrRow.name, rosterName);
+      if (candidateScore > bestScore) {
+        bestScore = candidateScore;
+        best = rosterPlayer;
+      }
+    }
+    if (best && bestScore > 0) {
+      const rosterId = best?.id ?? best?.player_id ?? best?.name;
+      usedRosterIds.add(rosterId);
+      score += bestScore;
+    }
+  });
+
+  return score;
 }
 
 export function mergePerformanceCaptureWithRoster(players = [], rosterPlayers = []) {
@@ -124,7 +161,16 @@ export function mergePerformanceCaptureWithRoster(players = [], rosterPlayers = 
 
   ocrRows.forEach((ocrRow, ocrIndex) => {
     if (!ocrRow || !normalizeLine(ocrRow.name)) return;
-    const matchedRoster = roster.find((rosterPlayer) => !matchedRosterIds.has(rosterPlayer.id) && isCompatiblePlayerKey(ocrRow.name, rosterPlayer.name));
+    let matchedRoster = null;
+    let matchedScore = 0;
+    for (const rosterPlayer of roster) {
+      if (matchedRosterIds.has(rosterPlayer.id)) continue;
+      const score = getPlayerNameMatchScore(ocrRow.name, rosterPlayer.name);
+      if (score > matchedScore) {
+        matchedScore = score;
+        matchedRoster = rosterPlayer;
+      }
+    }
     if (matchedRoster) {
       matchedRosterIds.add(matchedRoster.id);
       const rowName = normalizeLine(ocrRow.name);
@@ -136,6 +182,7 @@ export function mergePerformanceCaptureWithRoster(players = [], rosterPlayers = 
         isRosterFallback: false,
         isOcrOnly: false,
         scanOrder: ocrIndex,
+        matchScore: matchedScore,
       });
       return;
     }
