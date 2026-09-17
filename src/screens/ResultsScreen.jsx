@@ -838,6 +838,10 @@ export function ResultsScreen({
       return sections;
     });
   }, [resolvedGroups, resolvedFixturesByGroup, fixtureLeg]);
+  const hasFixtureSplit = React.useMemo(
+    () => groupSections.some((section) => section.leg === "FIXTURE_1" || section.leg === "FIXTURE_2"),
+    [groupSections]
+  );
   const filteredGroupSections = React.useMemo(() => {
     const teamFiltered = matchTeamFilter === "ALL"
       ? groupSections
@@ -848,9 +852,9 @@ export function ResultsScreen({
         }))
         .filter((section) => section.fixtures.length > 0);
 
-    if (fixtureLeg !== "double" || matchLegFilter === "ALL") return teamFiltered;
+    if (!hasFixtureSplit || matchLegFilter === "ALL") return teamFiltered;
     return teamFiltered.filter((section) => section.leg === matchLegFilter);
-  }, [fixtureLeg, groupSections, matchLegFilter, matchTeamFilter]);
+  }, [groupSections, hasFixtureSplit, matchLegFilter, matchTeamFilter]);
 
   const firstRoundComplete = React.useMemo(() => {
     if (!groupsEnabled || Object.keys(resolvedGroups).length === 0) return false;
@@ -1191,7 +1195,7 @@ export function ResultsScreen({
             )
           )
         ),
-        fixtureLeg === "double" && React.createElement("div", {
+        hasFixtureSplit && React.createElement("div", {
           style: {
             ...surfaceCard,
             padding: 12,
