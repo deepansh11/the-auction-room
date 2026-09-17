@@ -817,22 +817,26 @@ export function ResultsScreen({
   }, [isHost, matchTeamFilter, matchTeamOptions, selectedName]);
 
   const groupSections = React.useMemo(() => {
-    const splitForSeason = seasonNumber >= 2 && fixtureLeg === "double";
+    const splitForLegs = fixtureLeg === "double";
     return Object.entries(resolvedGroups).flatMap(([label, teams]) => {
-      const groupFixtures = resolvedFixturesByGroup[label] || [];
+      const groupFixtures = [...(resolvedFixturesByGroup[label] || [])].sort((a, b) => {
+        const roundDiff = (Number(a.round) || 0) - (Number(b.round) || 0);
+        if (roundDiff !== 0) return roundDiff;
+        return String(a.id || "").localeCompare(String(b.id || ""));
+      });
       const firstLegLimit = getBaseRoundCount(teams.length);
       const firstLeg = groupFixtures.filter((fixture) => Number(fixture.round || 0) <= firstLegLimit);
       const secondLeg = groupFixtures.filter((fixture) => Number(fixture.round || 0) > firstLegLimit);
-      if (!splitForSeason) {
+      if (!splitForLegs) {
         return [{ id: `${label}-all`, groupLabel: label, title: `Group ${label}`, subtitle: `${teams.length} teams`, fixtures: groupFixtures }];
       }
-      const sections = [{ id: `${label}-first`, groupLabel: label, title: `Group ${label} · First round`, subtitle: "Before transfer window", fixtures: firstLeg }];
+      const sections = [{ id: `${label}-first`, groupLabel: label, title: `Group ${label} · Fixture 1`, subtitle: "First set of combinations", fixtures: firstLeg }];
       if (secondLeg.length > 0) {
-        sections.push({ id: `${label}-second`, groupLabel: label, title: `Group ${label} · Second round`, subtitle: "After transfer window", fixtures: secondLeg });
+        sections.push({ id: `${label}-second`, groupLabel: label, title: `Group ${label} · Fixture 2`, subtitle: "Second set of combinations", fixtures: secondLeg });
       }
       return sections;
     });
-  }, [resolvedGroups, resolvedFixturesByGroup, seasonNumber, fixtureLeg]);
+  }, [resolvedGroups, resolvedFixturesByGroup, fixtureLeg]);
   const filteredGroupSections = React.useMemo(() => {
     if (matchTeamFilter === "ALL") return groupSections;
     return groupSections

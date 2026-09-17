@@ -558,6 +558,24 @@ export function BallonDorPanel({
     }
   };
 
+  const loadDefaultSquad = () => {
+    if (selectedParticipantRoster.length === 0) {
+      setError("Select a team first so I can load its default squad.");
+      return;
+    }
+
+    const rosterFallbackDraft = mergePerformanceCaptureWithRoster([], selectedParticipantRoster);
+    setDraft({
+      ...emptyDraft(),
+      players: rosterFallbackDraft.players,
+      rosterFallbackPlayerCount: rosterFallbackDraft.rosterFallbackPlayerCount,
+      matchedRosterPlayerCount: rosterFallbackDraft.matchedRosterPlayerCount,
+      unmatchedOcrPlayerCount: rosterFallbackDraft.unmatchedOcrPlayerCount,
+    });
+    setError("");
+    setSuccessMessage(`Loaded ${rosterFallbackDraft.players.length} default squad row(s) from ${selectedParticipant?.name || "the selected team"}.`);
+  };
+
   const handleFilePicked = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -765,6 +783,9 @@ export function BallonDorPanel({
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                <button onClick={() => fileInputRef.current?.click()} style={{ background: "linear-gradient(135deg,#4FC3F7,#8fe7c0)", color: "#06110c", border: "none", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1 }}>
                  {ocrBusy ? "SCANNING…" : "UPLOAD PLAYER TABLE"}
+               </button>
+               <button onClick={loadDefaultSquad} disabled={selectedParticipantRoster.length === 0} style={{ background: "#0d1119", color: "#4FC3F7", border: "1px solid rgba(79,195,247,.28)", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1, opacity: selectedParticipantRoster.length === 0 ? 0.55 : 1 }}>
+                 LOAD DEFAULT SQUAD
                </button>
                <button onClick={addManualRow} style={{ background: "#0d1119", color: "#e8f7ef", border: "1px solid #263247", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1 }}>
                  ADD MANUAL ROW
