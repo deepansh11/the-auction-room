@@ -32,6 +32,10 @@ function normalizeTeamKey(value = "") {
   return String(value || "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
 }
 
+function normalizePlayerKey(value = "") {
+  return String(value || "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
 function parseNumericBlock(lines, startIndex, endIndex, { allowFloat = false, max = 99 } = {}) {
   return lines
     .slice(startIndex, endIndex)
@@ -98,8 +102,10 @@ function cleanNameToken(token) {
 }
 
 function normalizeDetectedPlayerName(value) {
-  const tokens = normalizeLine(value).split(" ").filter(Boolean);
-  if (tokens.length <= 1) return normalizeLine(value);
+  let normalized = normalizeLine(value);
+  normalized = normalized.replace(/\s+(?:Total Rating|Player of the Match|Summary).*$/i, "");
+  const tokens = normalized.split(" ").filter(Boolean);
+  if (tokens.length <= 1) return normalized;
 
   const nextTokens = [...tokens];
   while (nextTokens.length > 1) {
@@ -133,54 +139,120 @@ function countVisiblePlayerSlots(lines) {
   return count >= 10 ? 12 : count;
 }
 
+function stripSummarySuffix(line) {
+  const summaryKeywords = /(shot accuracy|pass accuracy|dribble success|tackle success|fouls committed|possession won|possession lost|distance covered|distance sprinted|ball recovery time|yellow cards|interceptions|corners|offsides|free kicks|penalty kicks|expected goals|passes|tackles|minutes played|goals|assists|summary|player of the match)/i;
+  const matchIndex = line.search(summaryKeywords);
+  return matchIndex >= 0 ? line.slice(0, matchIndex).trim() : line.trim();
+}
+
 function parsePlayerRowLine(line) {
-  const cleaned = normalizeLine(line);
+  const cleaned = stripSummarySuffix(normalizeLine(line));
   if (!cleaned) return null;
-  const tokens = cleaned.split(" ").filter(Boolean);
-  const pos = normalizePositionToken(tokens[0]);
-  if (!POSITION_TOKENS.has(pos)) return null;
 
-  const nameTokens = [];
-  const statValues = [];
-  let rating = null;
-
-  for (const rawToken of tokens.slice(1)) {
-    if (rating === null) {
-      const maybeRating = parseRatingToken(rawToken);
-      if (maybeRating !== null) {
-        rating = maybeRating;
-        continue;
-      }
-
-      const nextNameToken = cleanNameToken(rawToken);
-      if (nextNameToken) nameTokens.push(nextNameToken);
-      continue;
+  const regexRow = cleaned.match(/^(?:[A-Z]{2,4}\s+)?([A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ.\-'’ ]{2,})\s+([0-9]{1,2}(?:\.\d)?)\s+([0-9]{1,2})\s*(?:[^0-9A-Za-zÀ-ÖØ-öø-ÿ]{0,3})\s*([0-9]{1,2})?/i);
+  if (regexRow) {
+    const [, name, ratingText, goalsText, assistsText] = regexRow;
+    const rating = parseRatingToken(ratingText);
+    const goals = parseStatToken(goalsText);
+    const assists = parseStatToken(assistsText);
+    const normalizedName = normalizeDetectedPlayerName(name);
+    if (
+      rating !== null
+      && normalizedName
+      && normalizedName.length >= 4
+      && !looksLikeTeamName(normalizedName)
+      && !/(total rating|player of the match|goal|assist|summary)/i.test(normalizedName)
+    ) {
+      return {
+        name: normalizedName,
+        rating,
+        goals: goals ?? "",
+        assists: assists ?? "",
+      };
     }
-
-    const maybeStat = parseStatToken(rawToken);
-    if (maybeStat !== null) statValues.push(maybeStat);
   }
 
-  const name = normalizeDetectedPlayerName(nameTokens.join(" "));
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (tokens.length < 3) return null;
+
+  let ratingIndex = -1;
+  let rating = null;
+  const numericCandidates = [];
+
+  tokens.forEach((token, index) => {
+    const raw = sanitizeOcrToken(token);
+    if (!raw || /[%]/.test(raw)) return;
+    const value = Number.parseFloat(raw.replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(value) || value < 0) return;
+    numericCandidates.push({ index, token, value, numeric: raw.replace(/[^0-9.]/g, "") });
+    if (ratingIndex === -1) {
+      const maybeRating = parseRatingToken(token);
+      if (maybeRating !== null) {
+        rating = maybeRating;
+        ratingIndex = index;
+      }
+    }
+  });
+
+  if (ratingIndex === -1) {
+    const positionToken = normalizePositionToken(tokens[0]);
+    if (!POSITION_TOKENS.has(positionToken)) return null;
+    const positionAdjusted = tokens.slice(1);
+    const positionRatingIndex = positionAdjusted.findIndex((token) => parseRatingToken(token) !== null);
+    if (positionRatingIndex === -1) return null;
+    ratingIndex = positionRatingIndex + 1;
+    rating = parseRatingToken(positionAdjusted[positionRatingIndex]);
+  }
+
+  const rawNameTokens = tokens.slice(0, ratingIndex);
+  while (rawNameTokens.length > 0) {
+    const next = rawNameTokens[0];
+    const normalized = normalizePositionToken(next);
+    const letterOnly = next.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
+    if (POSITION_TOKENS.has(normalized) || /^[A-Z]$/.test(letterOnly) || /^[-=:@|/\\]+$/.test(next)) {
+      rawNameTokens.shift();
+      continue;
+    }
+    break;
+  }
+
+  const nameSource = rawNameTokens
+    .join(" ")
+    .replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+/, "")
+    .replace(/[^A-Za-zÀ-ÖØ-öø-ÿ.\-'’ ]+$/g, "")
+    .trim();
+
+  const name = normalizeDetectedPlayerName(nameSource);
   const alphaOnlyName = name.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
-  if (!name || alphaOnlyName.length < 4) return null;
+  if (!name || alphaOnlyName.length < 4 || looksLikeTeamName(name)) return null;
+
+  const trailingStats = numericCandidates
+    .filter((entry) => entry.index > ratingIndex && entry.value <= 20 && !/%/.test(entry.token))
+    .map((entry) => entry.value);
+
+  const goals = trailingStats[0] ?? 0;
+  const assists = trailingStats[1] ?? (trailingStats.length > 0 ? 0 : "");
 
   return {
     name,
     rating: rating ?? "",
-    goals: rating !== null && statValues.length > 0 ? statValues[0] : "",
-    assists: rating !== null && statValues.length > 1 ? statValues[1] : "",
+    goals,
+    assists,
   };
 }
 
 function collectLikelyPlayerRows(lines) {
   const rosterStart = lines.findIndex((line) => /\bPOSA\b/i.test(line) && /\bName\b/i.test(line));
   const rosterEnd = lines.findIndex((line, index) => index > rosterStart && /overall position|back|sort|scroll/i.test(line));
-  const candidateLines = lines.slice(rosterStart >= 0 ? rosterStart + 1 : 0, rosterEnd > rosterStart ? rosterEnd : lines.length);
+  const headerScopedLines = lines.slice(rosterStart >= 0 ? rosterStart + 1 : 0, rosterEnd > rosterStart ? rosterEnd : lines.length);
 
-  const rows = candidateLines
-    .map(parsePlayerRowLine)
-    .filter(Boolean);
+  const rows = [
+    ...headerScopedLines.map(parsePlayerRowLine).filter(Boolean),
+    ...lines
+      .filter((line) => !/summary|overall position|back|sort|scroll|fouls committed|pass accuracy|shot accuracy|dribble success|tackle success|distance covered|distance sprinted|minutes played/i.test(line))
+      .map(parsePlayerRowLine)
+      .filter(Boolean),
+  ];
 
   const deduped = [];
   const seen = new Set();
@@ -191,6 +263,44 @@ function collectLikelyPlayerRows(lines) {
     deduped.push(row);
   });
   return deduped;
+}
+
+export function extractFeaturedPlayerCard(rawText = "", lines = []) {
+  const normalizedText = String(rawText || "").replace(/\s+/g, " ").trim();
+  const cardMatch = normalizedText.match(/\b\d{2}\s+([A-Za-zÀ-ÖØ-öø-ÿ.'’-]+)\s+OVR.*?([A-Za-zÀ-ÖØ-öø-ÿ.'’-]+)\s+POSA\b/i);
+  if (cardMatch) {
+    return {
+      name: normalizeDetectedPlayerName(`${cardMatch[1]} ${cardMatch[2]}`),
+      rating: null,
+    };
+  }
+
+  const headerIndex = lines.findIndex((line) => /\bPOSA\b/i.test(line) && /\bName\b/i.test(line));
+  const prefix = lines.slice(0, headerIndex > 0 ? headerIndex : Math.min(lines.length, 14));
+  for (let index = 0; index < prefix.length; index += 1) {
+    if (!looksLikePlayerName(prefix[index]) || looksLikeTeamName(prefix[index])) continue;
+
+    const nameLines = [prefix[index]];
+    let cursor = index + 1;
+    while (cursor < prefix.length && looksLikePlayerName(prefix[cursor]) && !looksLikeTeamName(prefix[cursor])) {
+      nameLines.push(prefix[cursor]);
+      cursor += 1;
+    }
+
+    const candidateName = normalizeDetectedPlayerName(nameLines.join(" "));
+    if (!candidateName || candidateName.length < 4 || looksLikeTeamName(candidateName)) continue;
+
+    const ratingLine = prefix.slice(cursor, Math.min(prefix.length, cursor + 4)).find((line) => {
+      const rating = parseRatingToken(line);
+      return rating !== null && rating >= 4 && rating <= 10;
+    });
+    const rating = ratingLine ? parseRatingToken(ratingLine) : null;
+    if (rating === null) continue;
+
+    return { name: candidateName, rating };
+  }
+
+  return null;
 }
 
 export function parsePerformanceCaptureText(rawText = "") {
@@ -210,6 +320,7 @@ export function parsePerformanceCaptureText(rawText = "") {
   const overallBeforeOvr = ovrIndex > 0 ? Number.parseFloat(lines[ovrIndex - 1]) : null;
 
   const fuzzyPlayerRows = collectLikelyPlayerRows(lines);
+  const featuredPlayerCard = extractFeaturedPlayerCard(rawText, lines);
   const names = fuzzyPlayerRows.map((row) => row.name);
   const ratings = fuzzyPlayerRows.map((row) => row.rating);
   const goals = fuzzyPlayerRows.map((row) => row.goals);
@@ -233,6 +344,17 @@ export function parsePerformanceCaptureText(rawText = "") {
   const resolvedRatings = fuzzyPlayerRows.length > 0 ? ratings : fallbackRatings;
   const resolvedGoals = fuzzyPlayerRows.length > 0 ? goals : fallbackGoals;
   const resolvedAssists = fuzzyPlayerRows.length > 0 ? assists : fallbackAssists;
+
+  if (featuredPlayerCard) {
+    const featuredKey = normalizePlayerKey(featuredPlayerCard.name);
+    const resolvedKeys = resolvedNames.map((name) => normalizePlayerKey(name));
+    if (featuredKey && !resolvedKeys.includes(featuredKey)) {
+      resolvedNames.unshift(featuredPlayerCard.name);
+      resolvedRatings.unshift(featuredPlayerCard.rating);
+      resolvedGoals.unshift(0);
+      resolvedAssists.unshift(0);
+    }
+  }
 
   const playerCount = Math.max(resolvedNames.length, resolvedRatings.length, resolvedGoals.length, resolvedAssists.length);
   const parsedPlayers = Array.from({ length: playerCount }, (_, index) => ({

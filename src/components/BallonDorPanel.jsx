@@ -7,7 +7,7 @@ import {
   apiSaveBallonDorSubmission,
   apiSavePublicBallonDorSubmission,
 } from "../lib/api.js";
-import { buildBallonDorRanking, parsePerformanceCaptureText, validatePerformanceCaptureDraft } from "../utils/performanceCapture.js";
+import { buildBallonDorRanking, extractFeaturedPlayerCard, parsePerformanceCaptureText, validatePerformanceCaptureDraft } from "../utils/performanceCapture.js";
 import { generateBallonDorUploadLink } from "../utils/roomUtils.js";
 
 function emptyPlayerRow(index) {
@@ -87,16 +87,18 @@ function preprocessForOcr(file, crop, { contrast = 1.35, saturation = 1.2, thres
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.filter = `contrast(${contrast}) saturate(${saturation})`;
       ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const { data } = imageData;
-      for (let i = 0; i < data.length; i += 4) {
-        const luminance = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-        const target = luminance > threshold ? 255 : 0;
-        data[i] = target;
-        data[i + 1] = target;
-        data[i + 2] = target;
+      if (Number.isFinite(threshold)) {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const { data } = imageData;
+        for (let i = 0; i < data.length; i += 4) {
+          const luminance = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+          const target = luminance > threshold ? 255 : 0;
+          data[i] = target;
+          data[i + 1] = target;
+          data[i + 2] = target;
+        }
+        ctx.putImageData(imageData, 0, 0);
       }
-      ctx.putImageData(imageData, 0, 0);
       URL.revokeObjectURL(objectUrl);
       resolve(canvas);
     };
@@ -121,6 +123,14 @@ async function scanRosterRegion(file) {
     {
       crop: { x: 0.015, y: 0.27, width: 0.79, height: 0.61 },
       image: { contrast: 1.45, saturation: 1.05, threshold: 170 },
+    },
+    {
+      crop: { x: 0.012, y: 0.11, width: 0.58, height: 0.82 },
+      image: { contrast: 1.2, saturation: 1.05, threshold: null },
+    },
+    {
+      crop: { x: 0.08, y: 0.19, width: 0.74, height: 0.5 },
+      image: { contrast: 1.3, saturation: 1.1, threshold: null },
     },
   ];
 
@@ -155,6 +165,50 @@ async function scanRosterRegion(file) {
     }
     if (detectedCount >= 12 && ratedCount >= 10) {
       break;
+    }
+  }
+
+  const featuredCard = extractFeaturedPlayerCard(bestResult.text, bestResult.parsed?.lines || []);
+  if (featuredCard?.name) {
+    const ratingRecoveryVariant = {
+      crop: { x: 0.63, y: 0.08, width: 0.18, height: 0.18 },
+      image: { contrast: 1.4, saturation: 1.05, threshold: null },
+    };
+    const ratingRecoveryCanvas = await withTimeout(
+      preprocessForOcr(file, ratingRecoveryVariant.crop, ratingRecoveryVariant.image),
+      5000,
+      "Image preprocessing timed out."
+    );
+    const ratingRecoveryResult = await withTimeout(
+      recognize(ratingRecoveryCanvas, "eng", { logger: () => undefined }),
+      18000,
+      "OCR scan timed out."
+    );
+    const ratingRecoveryText = String(ratingRecoveryResult?.data?.text || "").trim();
+    const ratingMatch = ratingRecoveryText.match(/\b(10(?:\.0)?|[4-9](?:\.\d)?)\b/);
+    const featuredRating = ratingMatch ? Number.parseFloat(ratingMatch[1]) : null;
+    const bestKeys = (bestResult.parsed?.players || []).map((player) => normalizePlayerKey(player?.name || ""));
+    const featuredKey = normalizePlayerKey(featuredCard.name);
+    if (featuredKey && !bestKeys.includes(featuredKey)) {
+      const featuredPlayerRow = {
+        id: `scan-featured-${Date.now()}`,
+        name: featuredCard.name,
+        rating: Number.isFinite(featuredRating) ? featuredRating : "",
+        goals: 0,
+        assists: 0,
+        isPlayerOfTheMatch: false,
+      };
+      const mergedPlayers = [featuredPlayerRow, ...(bestResult.parsed.players || [])];
+      bestResult = {
+        ...bestResult,
+        parsed: {
+          ...bestResult.parsed,
+          players: mergedPlayers,
+          missingVisiblePlayerCount: Math.max(0, (bestResult.parsed.missingVisiblePlayerCount || 0) - 1),
+        },
+        detectedCount: mergedPlayers.length,
+        missingCount: Math.max(0, (bestResult.missingCount || 0) - 1),
+      };
     }
   }
 
@@ -370,14 +424,15 @@ export function BallonDorPanel({
     fixtures: resolvedFixtures,
   }), [draft, fixtureId, mappedParticipantName, resolvedFixtures, resolvedParticipants]);
 
-  const handleFilePicked = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
+  const processPickedImage = async (file) => {
+    if (!file || !file.type?.startsWith("image/")) {
+      setError("Please paste or upload a valid image file.");
+      return;
+    }
 
     setError("");
     setSuccessMessage("");
-    setSelectedFileName(file.name);
+    setSelectedFileName(file.name || "Pasted image");
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     const nextPreviewUrl = URL.createObjectURL(file);
     setPreviewUrl(nextPreviewUrl);
@@ -405,6 +460,31 @@ export function BallonDorPanel({
       setOcrBusy(false);
     }
   };
+
+  const handleFilePicked = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    await processPickedImage(file);
+  };
+
+  const handlePasteImage = React.useCallback((event) => {
+    const clipboardItems = event.clipboardData?.items || [];
+    const imageItem = Array.from(clipboardItems).find((item) => item.type.startsWith("image/"));
+    if (!imageItem) return;
+
+    event.preventDefault();
+    const file = imageItem.getAsFile();
+    if (file) {
+      processPickedImage(file);
+    }
+  }, [processPickedImage]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    window.addEventListener("paste", handlePasteImage);
+    return () => window.removeEventListener("paste", handlePasteImage);
+  }, [handlePasteImage]);
 
   const updatePlayer = (rowId, field, value) => {
     setDraft((prev) => ({
@@ -558,7 +638,7 @@ export function BallonDorPanel({
               </div>
               <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFilePicked} style={{ display: "none" }} />
               <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", lineHeight: 1.6 }}>
-                Keep only the <strong>player table</strong> visible in the screenshot — player names, RR, G and AST.
+               Keep only the <strong>player table</strong> visible in the screenshot — player names, RR, G and AST. You can also paste an image directly with Ctrl/Cmd + V.
               </div>
               {draft.missingVisiblePlayerCount > 0 ? (
                 <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: "1px solid #FFD70044", background: "#FFD70012", color: "#f7d774", fontFamily: "'Rajdhani'", fontSize: 12, lineHeight: 1.6 }}>
