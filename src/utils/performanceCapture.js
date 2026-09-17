@@ -64,29 +64,51 @@ function initialsForTokens(tokens = []) {
   return tokens.map((token) => token[0] || "").join("");
 }
 
+function buildNameFingerprint(value = "") {
+  const rawTokens = splitComparisonName(value);
+  const compactTokens = rawTokens.filter((token) => token.length > 1);
+  const initials = rawTokens.filter((token) => token.length === 1).join("");
+  const compactString = compactTokens.join(" ");
+  const surname = compactTokens[compactTokens.length - 1] || rawTokens[rawTokens.length - 1] || "";
+  const givenTokens = compactTokens.slice(0, -1);
+  const givenInitials = givenTokens.map((token) => token[0] || "").join("");
+  return {
+    rawTokens,
+    compactTokens,
+    compactString,
+    surname,
+    givenTokens,
+    initials,
+    givenInitials,
+    leadingInitials: `${initials}${givenInitials}`,
+  };
+}
+
 function getPlayerNameMatchScore(left = "", right = "") {
   const a = normalizePlayerKey(left);
   const b = normalizePlayerKey(right);
   if (!a || !b) return 0;
   if (a === b) return 100;
 
-  const leftTokens = splitComparisonName(left);
-  const rightTokens = splitComparisonName(right);
-  if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
+  const leftFingerprint = buildNameFingerprint(left);
+  const rightFingerprint = buildNameFingerprint(right);
+  if (leftFingerprint.compactString && leftFingerprint.compactString === rightFingerprint.compactString) return 99;
 
-  const leftLast = leftTokens[leftTokens.length - 1];
-  const rightLast = rightTokens[rightTokens.length - 1];
-  if (!tokenMatches(leftLast, rightLast)) return 0;
+  if (!leftFingerprint.surname || !rightFingerprint.surname) return 0;
+  if (!tokenMatches(leftFingerprint.surname, rightFingerprint.surname)) return 0;
 
-  const leftGiven = leftTokens.slice(0, -1);
-  const rightGiven = rightTokens.slice(0, -1);
-  if (leftGiven.length === 0 || rightGiven.length === 0) return 60;
+  const leftLead = leftFingerprint.leadingInitials || leftFingerprint.surname[0] || "";
+  const rightLead = rightFingerprint.leadingInitials || rightFingerprint.surname[0] || "";
+  if (leftLead && rightLead && (leftLead === rightLead || leftLead.startsWith(rightLead) || rightLead.startsWith(leftLead))) {
+    return leftFingerprint.compactTokens.length > 1 || rightFingerprint.compactTokens.length > 1 ? 94 : 88;
+  }
 
-  const leftInitials = initialsForTokens(leftGiven);
-  const rightInitials = initialsForTokens(rightGiven);
-  if (leftInitials && rightInitials && leftInitials === rightInitials) return 95;
-  if (leftInitials && rightInitials && (leftInitials.startsWith(rightInitials) || rightInitials.startsWith(leftInitials))) return 85;
+  if (leftFingerprint.compactTokens.length === 1 || rightFingerprint.compactTokens.length === 1) {
+    return 82;
+  }
 
+  const leftGiven = leftFingerprint.givenTokens;
+  const rightGiven = rightFingerprint.givenTokens;
   const comparedLength = Math.min(leftGiven.length, rightGiven.length);
   let matches = 0;
   for (let index = 0; index < comparedLength; index += 1) {
@@ -96,10 +118,7 @@ function getPlayerNameMatchScore(left = "", right = "") {
       break;
     }
   }
-
-  if (matches === 0) return 40;
-  const tokenScore = 40 + (matches * 10);
-  return Math.min(tokenScore, 90);
+  return matches > 0 ? Math.min(70 + (matches * 8), 92) : 76;
 }
 
 function isCompatiblePlayerKey(left = "", right = "") {

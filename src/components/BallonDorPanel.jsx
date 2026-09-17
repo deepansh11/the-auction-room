@@ -33,8 +33,17 @@ function surfaceStyle() {
   return {
     background: "#0d1119",
     border: "1px solid #1f2937",
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 14,
+    padding: 12,
+  };
+}
+
+function bannerStyle() {
+  return {
+    background: "#0b121b",
+    border: "1px solid #22314a",
+    borderRadius: 14,
+    padding: "10px 12px",
   };
 }
 
@@ -466,6 +475,8 @@ export function BallonDorPanel({
     participants: resolvedParticipants,
     fixtures: resolvedFixtures,
   }), [draft, fixtureId, mappedParticipantName, resolvedFixtures, resolvedParticipants]);
+  const validationHeadline = validation.warnings.length === 0 ? "Scan looks good." : validation.warnings[0];
+  const validationExtraCount = Math.max(0, validation.warnings.length - 1);
 
   const processPickedImage = async (file) => {
     if (!file || !file.type?.startsWith("image/")) {
@@ -668,148 +679,153 @@ export function BallonDorPanel({
   }
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
+    <div style={{ display: "grid", gap: 12 }}>
       <div style={surfaceStyle()}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 6 }}>
           <div>
-            <div style={{ fontFamily: "'Bebas Neue'", fontSize: 28, color: "#FFD700", letterSpacing: 2 }}>
+            <div style={{ fontFamily: "'Bebas Neue'", fontSize: 24, color: "#FFD700", letterSpacing: 2 }}>
               {isPublicUpload ? "Upload Match Performance" : "Review Match Performance"}
             </div>
-            <p style={{ fontFamily: "'Rajdhani'", fontSize: 13, color: "#8ea0ba", lineHeight: 1.6, margin: "8px 0 0" }}>
+            <p style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", lineHeight: 1.5, margin: "6px 0 0" }}>
               Upload only the player table. We scan the roster rows in-browser and save only the reviewed player stats.
             </p>
-            {resolvedLeagueName ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 8 }}>{resolvedLeagueName}</div> : null}
+            {resolvedLeagueName ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6", marginTop: 6 }}>{resolvedLeagueName}</div> : null}
           </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {!isPublicUpload && canGenerateLink && user?.token ? (
-              <button onClick={handleCopyUploadLink} disabled={!fixtureId} style={{ background: "#0d1119", color: "#8fe7c0", border: "1px solid rgba(143,231,192,.28)", borderRadius: 999, padding: "10px 16px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 13, letterSpacing: 1, opacity: fixtureId ? 1 : 0.55 }}>
+              <button onClick={handleCopyUploadLink} disabled={!fixtureId} style={{ background: "#0d1119", color: "#8fe7c0", border: "1px solid rgba(143,231,192,.28)", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1, opacity: fixtureId ? 1 : 0.55 }}>
                 COPY PLAYER UPLOAD LINK
               </button>
             ) : null}
             {onClose ? (
-              <button onClick={onClose} style={{ background: "transparent", color: "#a7b1c2", border: "1px solid #263247", borderRadius: 999, padding: "10px 16px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 13, letterSpacing: 1 }}>
+              <button onClick={onClose} style={{ background: "transparent", color: "#a7b1c2", border: "1px solid #263247", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1 }}>
                 CLOSE
               </button>
             ) : null}
           </div>
         </div>
-        {copiedLink ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#8fe7c0", marginTop: 10 }}>{copiedLink}</div> : null}
-        {!!error ? <div style={{ marginTop: 12, color: "#ff8aa9", fontFamily: "'Rajdhani'", fontSize: 13 }}>{error}</div> : null}
-        {!!successMessage ? <div style={{ marginTop: 12, color: "#8fe7c0", fontFamily: "'Rajdhani'", fontSize: 13 }}>{successMessage}</div> : null}
+        {copiedLink ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#8fe7c0", marginTop: 8 }}>{copiedLink}</div> : null}
+        {!!error ? <div style={{ marginTop: 8, color: "#ff8aa9", fontFamily: "'Rajdhani'", fontSize: 12 }}>{error}</div> : null}
+        {!!successMessage ? <div style={{ marginTop: 8, color: "#8fe7c0", fontFamily: "'Rajdhani'", fontSize: 12 }}>{successMessage}</div> : null}
       </div>
 
       {publicContext.loading ? (
         <div style={surfaceStyle()}>
-          <div style={{ fontFamily: "'Rajdhani'", fontSize: 13, color: "#7f8ea6" }}>Loading upload details…</div>
+          <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" }}>Loading upload details…</div>
         </div>
       ) : (
         <React.Fragment>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 16 }}>
-            <div style={surfaceStyle()}>
-              <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: "#4FC3F7", letterSpacing: 2, marginBottom: 10 }}>Upload & Validate</div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                <button onClick={() => fileInputRef.current?.click()} style={{ background: "linear-gradient(135deg,#4FC3F7,#8fe7c0)", color: "#06110c", border: "none", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1 }}>
-                  {ocrBusy ? "SCANNING…" : "UPLOAD PLAYER TABLE"}
-                </button>
-                <button onClick={addManualRow} style={{ background: "#0d1119", color: "#e8f7ef", border: "1px solid #263247", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1 }}>
-                  ADD MANUAL ROW
-                </button>
+          <div style={bannerStyle()}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}>
+               <div style={{ fontFamily: "'Rajdhani'", fontSize: 10, color: validation.status === "ready" ? "#8fe7c0" : "#FFD700", fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase" }}>
+                 {validation.status === "ready" ? "Ready to save" : "Needs review"}
+               </div>
+               <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#d7deea", marginTop: 4, lineHeight: 1.45 }}>
+                 {validationHeadline}
+                 {validationExtraCount > 0 ? ` +${validationExtraCount} more` : ""}
+               </div>
               </div>
-              <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFilePicked} style={{ display: "none" }} />
-              <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", lineHeight: 1.6 }}>
-               Keep only the <strong>player table</strong> visible in the screenshot — player names, RR, G and AST. You can also paste an image directly with Ctrl/Cmd + V.
-              </div>
-              {draft.missingVisiblePlayerCount > 0 ? (
-                <div style={{ marginTop: 12, padding: 12, borderRadius: 12, border: "1px solid #FFD70044", background: "#FFD70012", color: "#f7d774", fontFamily: "'Rajdhani'", fontSize: 12, lineHeight: 1.6 }}>
-                  OCR missed some visible rows, so blank placeholders were added below. Fill those manually, then save.
-                </div>
-              ) : null}
-              {selectedFileName ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", marginTop: 12 }}>Source file: {selectedFileName}</div> : null}
-              {previewUrl ? <img src={previewUrl} alt="Performance upload preview" style={{ width: "100%", borderRadius: 14, border: "1px solid #263247", objectFit: "cover", maxHeight: 260, marginTop: 12 }} /> : null}
-            </div>
-
-            <div style={surfaceStyle()}>
-              <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: "#4FC3F7", letterSpacing: 2, marginBottom: 10 }}>Validation</div>
-              <div style={{ fontFamily: "'Rajdhani'", fontSize: 13, color: validation.status === "ready" ? "#8fe7c0" : "#FFD700", fontWeight: 700, marginBottom: 10 }}>
-                {validation.status === "ready" ? "READY TO SAVE" : "NEEDS REVIEW"}
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, color: "#9aa5b5", fontFamily: "'Rajdhani'", fontSize: 13, lineHeight: 1.6 }}>
-                {validation.warnings.length === 0
-                  ? <li>Scan looks good. Review and save whenever ready.</li>
-                  : validation.warnings.map((warning) => <li key={warning}>{warning}</li>)}
-              </ul>
+              <button onClick={() => setView("table")} style={{ background: "#0d1119", color: "#8ea0ba", border: "1px solid #263247", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1 }}>
+               TABLE
+              </button>
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 16, alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 12 }}>
             <div style={surfaceStyle()}>
-              <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 2, marginBottom: 12 }}>Review Upload</div>
-              <div style={{ display: "grid", gap: 12 }}>
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" }}>League team</span>
-                  <select value={mappedParticipantName} onChange={(event) => setMappedParticipantName(event.target.value)} style={{ background: "#09111b", color: "#fff", border: "1px solid #263247", borderRadius: 10, padding: "10px 12px" }}>
-                    <option value="">Select team</option>
-                    {resolvedParticipants.map((participant) => <option key={participant.name} value={participant.name}>{participant.name}</option>)}
-                  </select>
-                </label>
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" }}>Match</span>
-                  <select value={fixtureId} onChange={(event) => setFixtureId(event.target.value)} style={{ background: "#09111b", color: "#fff", border: "1px solid #263247", borderRadius: 10, padding: "10px 12px" }}>
-                    <option value="">Select fixture</option>
-                    {filteredFixtures.map((fixture) => <option key={fixture.id} value={fixture.id}>{fixture.home} vs {fixture.away}</option>)}
-                  </select>
-                </label>
+              <div style={{ fontFamily: "'Bebas Neue'", fontSize: 18, color: "#4FC3F7", letterSpacing: 2, marginBottom: 8 }}>Upload</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+               <button onClick={() => fileInputRef.current?.click()} style={{ background: "linear-gradient(135deg,#4FC3F7,#8fe7c0)", color: "#06110c", border: "none", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1 }}>
+                 {ocrBusy ? "SCANNING…" : "UPLOAD PLAYER TABLE"}
+               </button>
+               <button onClick={addManualRow} style={{ background: "#0d1119", color: "#e8f7ef", border: "1px solid #263247", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1 }}>
+                 ADD MANUAL ROW
+               </button>
+              </div>
+              <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleFilePicked} style={{ display: "none" }} />
+              <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6", lineHeight: 1.45 }}>
+               Keep only the <strong>player table</strong> visible in the screenshot — player names, RR, G and AST. You can also paste an image directly with Ctrl/Cmd + V.
+              </div>
+              {draft.missingVisiblePlayerCount > 0 ? (
+               <div style={{ marginTop: 10, padding: 10, borderRadius: 12, border: "1px solid #FFD70044", background: "#FFD70012", color: "#f7d774", fontFamily: "'Rajdhani'", fontSize: 11, lineHeight: 1.45 }}>
+                 OCR missed some visible rows, so blank placeholders were added below. Fill those manually, then save.
+               </div>
+              ) : null}
+              {selectedFileName ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba", marginTop: 10 }}>Source file: {selectedFileName}</div> : null}
+              {previewUrl ? <img src={previewUrl} alt="Performance upload preview" style={{ width: "100%", borderRadius: 12, border: "1px solid #263247", objectFit: "cover", maxHeight: 220, marginTop: 10 }} /> : null}
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12, alignItems: "start" }}>
+            <div style={surfaceStyle()}>
+              <div style={{ fontFamily: "'Bebas Neue'", fontSize: 18, color: "#fff", letterSpacing: 2, marginBottom: 10 }}>Review</div>
+              <div style={{ display: "grid", gap: 10 }}>
+               <label style={{ display: "grid", gap: 6 }}>
+                 <span style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" }}>League team</span>
+                 <select value={mappedParticipantName} onChange={(event) => setMappedParticipantName(event.target.value)} style={{ background: "#09111b", color: "#fff", border: "1px solid #263247", borderRadius: 10, padding: "9px 11px" }}>
+                   <option value="">Select team</option>
+                   {resolvedParticipants.map((participant) => <option key={participant.name} value={participant.name}>{participant.name}</option>)}
+                 </select>
+               </label>
+               <label style={{ display: "grid", gap: 6 }}>
+                 <span style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" }}>Match</span>
+                 <select value={fixtureId} onChange={(event) => setFixtureId(event.target.value)} style={{ background: "#09111b", color: "#fff", border: "1px solid #263247", borderRadius: 10, padding: "9px 11px" }}>
+                   <option value="">Select fixture</option>
+                   {filteredFixtures.map((fixture) => <option key={fixture.id} value={fixture.id}>{fixture.home} vs {fixture.away}</option>)}
+                 </select>
+               </label>
               </div>
             </div>
 
             <div style={surfaceStyle()}>
-              <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 2, marginBottom: 12 }}>Scanned Players</div>
-              <div style={{ display: "grid", gap: 10 }}>
-                {(draft.players || []).map((player, index) => (
-                  <div key={player.id} style={{ display: "grid", gap: 10, background: "#08111a", border: player.isManualPlaceholder ? "1px solid #FFD70055" : "1px solid #1e293b", borderRadius: 12, padding: 10 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <input value={player.name} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(player.id, "name", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "10px 12px", minWidth: 0, flex: "1 1 240px", width: "100%" }} />
-                      {player.isManualPlaceholder ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#FFD700", fontWeight: 700, letterSpacing: 1 }}>MANUAL</div> : null}
-                      {!player.isManualPlaceholder && player.isRosterFallback ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba", fontWeight: 700, letterSpacing: 1 }}>ROSTER</div> : null}
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: compactLayout ? "repeat(3,minmax(0,1fr))" : "repeat(3,minmax(72px,110px)) minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
-                      {[
-                        { key: "rating", label: "RR", value: player.rating },
-                        { key: "goals", label: "G", value: player.goals },
-                        { key: "assists", label: "AST", value: player.assists },
-                      ].map((field) => (
-                        <label key={field.key} style={{ display: "grid", gap: 4 }}>
-                          <span style={{ fontFamily: "'Rajdhani'", fontSize: 10, color: "#7f8ea6" }}>{field.label}</span>
-                          <input value={field.value} placeholder={field.label} onChange={(event) => updatePlayer(player.id, field.key, event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "8px 10px", width: "100%", minWidth: 0 }} />
-                        </label>
-                      ))}
-                      <div style={{ display: "flex", justifyContent: compactLayout ? "space-between" : "flex-end", alignItems: compactLayout ? "center" : "flex-end", gap: 8, flexWrap: "wrap", gridColumn: compactLayout ? "1 / -1" : "auto" }}>
-                        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", minHeight: 40 }}>
-                          <input type="radio" name="player-of-match" checked={Boolean(player.isPlayerOfTheMatch)} onChange={() => setDraft((prev) => ({ ...prev, players: (prev.players || []).map((entry) => ({ ...entry, isPlayerOfTheMatch: entry.id === player.id })) }))} />
-                          POTM
-                        </label>
-                        <button onClick={() => removeRow(player.id)} style={{ background: "transparent", color: "#ff8aa9", border: "1px solid #ff8aa944", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1, minHeight: 40 }}>
-                          REMOVE
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {(draft.players || []).length === 0 ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 13, color: "#7f8ea6" }}>Upload a player-table image or add rows manually.</div> : null}
+              <div style={{ fontFamily: "'Bebas Neue'", fontSize: 18, color: "#fff", letterSpacing: 2, marginBottom: 10 }}>Players</div>
+              <div style={{ display: "grid", gap: 8 }}>
+               {(draft.players || []).map((player, index) => (
+                 <div key={player.id} style={{ display: "grid", gap: 8, background: "#08111a", border: player.isManualPlaceholder ? "1px solid #FFD70055" : "1px solid #1e293b", borderRadius: 12, padding: 8 }}>
+                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                     <input value={player.name} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(player.id, "name", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "9px 11px", minWidth: 0, flex: "1 1 240px", width: "100%" }} />
+                     {player.isManualPlaceholder ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 10, color: "#FFD700", fontWeight: 700, letterSpacing: 1 }}>MANUAL</div> : null}
+                     {!player.isManualPlaceholder && player.isRosterFallback ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 10, color: "#8ea0ba", fontWeight: 700, letterSpacing: 1 }}>ROSTER</div> : null}
+                   </div>
+                   <div style={{ display: "grid", gridTemplateColumns: compactLayout ? "repeat(3,minmax(0,1fr))" : "repeat(3,minmax(72px,110px)) auto", gap: 8, alignItems: "center" }}>
+                     {[
+                       { key: "rating", label: "RR", value: player.rating },
+                       { key: "goals", label: "G", value: player.goals },
+                       { key: "assists", label: "AST", value: player.assists },
+                     ].map((field) => (
+                       <label key={field.key} style={{ display: "grid", gap: 4 }}>
+                         <span style={{ fontFamily: "'Rajdhani'", fontSize: 9, color: "#7f8ea6" }}>{field.label}</span>
+                         <input value={field.value} placeholder={field.label} onChange={(event) => updatePlayer(player.id, field.key, event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "7px 9px", width: "100%", minWidth: 0 }} />
+                       </label>
+                     ))}
+                     <div style={{ display: "flex", justifyContent: compactLayout ? "space-between" : "flex-end", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                       <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba" }}>
+                         <input type="radio" name="player-of-match" checked={Boolean(player.isPlayerOfTheMatch)} onChange={() => setDraft((prev) => ({ ...prev, players: (prev.players || []).map((entry) => ({ ...entry, isPlayerOfTheMatch: entry.id === player.id })) }))} />
+                         POTM
+                       </label>
+                       <button onClick={() => removeRow(player.id)} style={{ background: "transparent", color: "#ff8aa9", border: "1px solid #ff8aa944", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 10, letterSpacing: 1 }}>
+                         REMOVE
+                       </button>
+                     </div>
+                   </div>
+                 </div>
+               ))}
+               {(draft.players || []).length === 0 ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" }}>Upload a player-table image or add rows manually.</div> : null}
               </div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
-                <button onClick={handleSave} disabled={saving || ocrBusy || publicContext.loading} style={{ background: "linear-gradient(135deg,#FFD700,#fbbf24)", color: "#111827", border: "none", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1, opacity: saving || ocrBusy || publicContext.loading ? 0.6 : 1, flex: compactLayout ? "1 1 100%" : "0 0 auto" }}>
-                  {saving ? "SAVING…" : "SAVE REVIEWED DATA"}
-                </button>
-                <button onClick={() => resetDraft({ preserveTeam: true })} style={{ background: "#0d1119", color: "#e8f7ef", border: "1px solid #263247", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1, flex: compactLayout ? "1 1 100%" : "0 0 auto" }}>
-                  RESET
-                </button>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+               <button onClick={handleSave} disabled={saving || ocrBusy || publicContext.loading} style={{ background: "linear-gradient(135deg,#FFD700,#fbbf24)", color: "#111827", border: "none", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1, opacity: saving || ocrBusy || publicContext.loading ? 0.6 : 1, flex: compactLayout ? "1 1 100%" : "0 0 auto" }}>
+                 {saving ? "SAVING…" : "SAVE REVIEWED DATA"}
+               </button>
+               <button onClick={() => resetDraft({ preserveTeam: true })} style={{ background: "#0d1119", color: "#e8f7ef", border: "1px solid #263247", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 12, letterSpacing: 1, flex: compactLayout ? "1 1 100%" : "0 0 auto" }}>
+                 RESET
+               </button>
               </div>
               {draft.rawText ? (
-                <details style={{ marginTop: 16 }}>
-                  <summary style={{ cursor: "pointer", fontFamily: "'Rajdhani'", fontSize: 13, color: "#7f8ea6" }}>View scanned text</summary>
-                  <pre style={{ whiteSpace: "pre-wrap", marginTop: 12, fontFamily: "monospace", fontSize: 11, color: "#9aa5b5" }}>{draft.rawText}</pre>
-                </details>
+               <details style={{ marginTop: 12 }}>
+                 <summary style={{ cursor: "pointer", fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" }}>View scanned text</summary>
+                 <pre style={{ whiteSpace: "pre-wrap", marginTop: 10, fontFamily: "monospace", fontSize: 10, color: "#9aa5b5" }}>{draft.rawText}</pre>
+               </details>
               ) : null}
             </div>
           </div>
