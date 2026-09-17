@@ -735,6 +735,7 @@ export function ResultsScreen({
   const [historyPosFilter, setHistoryPosFilter] = React.useState("ALL");
   const [historyTierFilter, setHistoryTierFilter] = React.useState("ALL");
   const [matchTeamFilter, setMatchTeamFilter] = React.useState("ALL");
+  const [matchLegFilter, setMatchLegFilter] = React.useState("ALL");
   const [fixturesState, setFixturesState] = React.useState(() => {
     const next = fixtures || {};
     const { _knockout, ...groupFixtures } = next;
@@ -828,24 +829,28 @@ export function ResultsScreen({
       const firstLeg = groupFixtures.filter((fixture) => Number(fixture.round || 0) <= firstLegLimit);
       const secondLeg = groupFixtures.filter((fixture) => Number(fixture.round || 0) > firstLegLimit);
       if (!splitForLegs) {
-        return [{ id: `${label}-all`, groupLabel: label, title: `Group ${label}`, subtitle: `${teams.length} teams`, fixtures: groupFixtures }];
+        return [{ id: `${label}-all`, groupLabel: label, leg: "ALL", title: `Group ${label}`, subtitle: `${teams.length} teams`, fixtures: groupFixtures }];
       }
-      const sections = [{ id: `${label}-first`, groupLabel: label, title: `Group ${label} · Fixture 1`, subtitle: "First set of combinations", fixtures: firstLeg }];
+      const sections = [{ id: `${label}-first`, groupLabel: label, leg: "FIXTURE_1", title: `Group ${label} · Fixture 1`, subtitle: "First set of combinations", fixtures: firstLeg }];
       if (secondLeg.length > 0) {
-        sections.push({ id: `${label}-second`, groupLabel: label, title: `Group ${label} · Fixture 2`, subtitle: "Second set of combinations", fixtures: secondLeg });
+        sections.push({ id: `${label}-second`, groupLabel: label, leg: "FIXTURE_2", title: `Group ${label} · Fixture 2`, subtitle: "Second set of combinations", fixtures: secondLeg });
       }
       return sections;
     });
   }, [resolvedGroups, resolvedFixturesByGroup, fixtureLeg]);
   const filteredGroupSections = React.useMemo(() => {
-    if (matchTeamFilter === "ALL") return groupSections;
-    return groupSections
-      .map((section) => ({
-        ...section,
-        fixtures: section.fixtures.filter((fixture) => fixture.home === matchTeamFilter || fixture.away === matchTeamFilter),
-      }))
-      .filter((section) => section.fixtures.length > 0);
-  }, [groupSections, matchTeamFilter]);
+    const teamFiltered = matchTeamFilter === "ALL"
+      ? groupSections
+      : groupSections
+        .map((section) => ({
+          ...section,
+          fixtures: section.fixtures.filter((fixture) => fixture.home === matchTeamFilter || fixture.away === matchTeamFilter),
+        }))
+        .filter((section) => section.fixtures.length > 0);
+
+    if (fixtureLeg !== "double" || matchLegFilter === "ALL") return teamFiltered;
+    return teamFiltered.filter((section) => section.leg === matchLegFilter);
+  }, [fixtureLeg, groupSections, matchLegFilter, matchTeamFilter]);
 
   const firstRoundComplete = React.useMemo(() => {
     if (!groupsEnabled || Object.keys(resolvedGroups).length === 0) return false;
@@ -1186,18 +1191,60 @@ export function ResultsScreen({
             )
           )
         ),
+        fixtureLeg === "double" && React.createElement("div", {
+          style: {
+            ...surfaceCard,
+            padding: 12,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }
+        },
+          React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginRight: 6 } }, "Fixture view"),
+          ["ALL", "FIXTURE_1", "FIXTURE_2"].map((value) => React.createElement("button", {
+            key: value,
+            onClick: () => setMatchLegFilter(value),
+            style: {
+              background: matchLegFilter === value ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "#0d1119",
+              color: matchLegFilter === value ? "#06110c" : "#a7b1c2",
+              border: `1px solid ${matchLegFilter === value ? "rgba(79,195,247,.42)" : "#1f2937"}`,
+              borderRadius: 999,
+              padding: "8px 14px",
+              cursor: "pointer",
+              fontFamily: "'Bebas Neue'",
+              fontSize: 12,
+              letterSpacing: 1,
+            }
+          }, value === "ALL" ? "ALL FIXTURES" : value === "FIXTURE_1" ? "FIXTURE 1" : "FIXTURE 2"))
+        ),
         groupSections.length === 0
           ? React.createElement("div", { style: { ...surfaceCard, padding: 28, textAlign: "center", fontFamily: "'Rajdhani'", color: "#718096" } }, "No fixtures configured for this season.")
           : filteredGroupSections.length === 0
             ? React.createElement("div", { style: { ...surfaceCard, padding: 28, textAlign: "center", fontFamily: "'Rajdhani'", color: "#718096" } }, "No fixtures found for the selected team.")
             : filteredGroupSections.map((section) => React.createElement(
               "div",
-              { key: section.id, style: { ...surfaceCard, padding: 20 } },
+              {
+                key: section.id,
+                style: {
+                  ...surfaceCard,
+                  padding: 20,
+                  borderLeft: section.leg === "FIXTURE_1"
+                    ? "4px solid rgba(79,195,247,.65)"
+                    : section.leg === "FIXTURE_2"
+                      ? "4px solid rgba(255,184,77,.65)"
+                      : surfaceCard.border,
+                }
+              },
               React.createElement(
                 "div",
                 { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" } },
                 React.createElement("div", null,
-                  React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, section.title),
+                  React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+                    React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, section.title),
+                    section.leg === "FIXTURE_1" && React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 11, color: "#4FC3F7", border: "1px solid rgba(79,195,247,.28)", background: "#4FC3F714", borderRadius: 999, padding: "4px 10px", letterSpacing: 1 } }, "FIXTURE 1"),
+                    section.leg === "FIXTURE_2" && React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 11, color: "#FFB84D", border: "1px solid rgba(255,184,77,.28)", background: "#FFB84D14", borderRadius: 999, padding: "4px 10px", letterSpacing: 1 } }, "FIXTURE 2")
+                  ),
                   React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, section.subtitle)
                 ),
                 React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, `${section.fixtures.filter(isPlayedFixture).length}/${section.fixtures.length} scored`)
