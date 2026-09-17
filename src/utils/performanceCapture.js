@@ -65,39 +65,49 @@ export function mergePerformanceCaptureWithRoster(players = [], rosterPlayers = 
     }))
     .filter((player) => player.name);
 
-  const usedOcrIds = new Set();
-  const mergedPlayers = roster.map((rosterPlayer) => {
-    const matchedOcr = ocrRows.find((row) => {
-      if (!row || usedOcrIds.has(row.id)) return false;
-      return isCompatiblePlayerKey(row.name, rosterPlayer.name);
-    });
+  const matchedRosterIds = new Set();
+  const matchedByOcrOrder = [];
 
-    if (!matchedOcr) return rosterPlayer;
+  ocrRows.forEach((ocrRow, ocrIndex) => {
+    if (!ocrRow || !normalizeLine(ocrRow.name)) return;
+    const matchedRoster = roster.find((rosterPlayer) => !matchedRosterIds.has(rosterPlayer.id) && isCompatiblePlayerKey(ocrRow.name, rosterPlayer.name));
+    if (matchedRoster) {
+      matchedRosterIds.add(matchedRoster.id);
+      const rowName = normalizeLine(ocrRow.name);
+      matchedByOcrOrder.push({
+        ...matchedRoster,
+        ...ocrRow,
+        name: matchedRoster.name,
+        ocrName: rowName && rowName !== matchedRoster.name ? rowName : "",
+        isRosterFallback: false,
+        isOcrOnly: false,
+        scanOrder: ocrIndex,
+      });
+      return;
+    }
 
-    usedOcrIds.add(matchedOcr.id);
-    const rowName = normalizeLine(matchedOcr.name);
-    return {
-      ...rosterPlayer,
-      ...matchedOcr,
-      name: rosterPlayer.name,
-      ocrName: rowName && rowName !== rosterPlayer.name ? rowName : "",
-      isRosterFallback: false,
-    };
-  });
-
-  const leftoverOcrRows = ocrRows
-    .filter((row) => row && !usedOcrIds.has(row.id) && normalizeLine(row.name))
-    .map((row) => ({
-      ...row,
+    matchedByOcrOrder.push({
+      ...ocrRow,
       isRosterFallback: false,
       isOcrOnly: true,
+      scanOrder: ocrIndex,
+    });
+  });
+
+  const leftoverRosterRows = roster
+    .filter((player) => !matchedRosterIds.has(player.id))
+    .map((player, index) => ({
+      ...player,
+      isRosterFallback: true,
+      rosterIndex: player.rosterIndex ?? index,
+      fallbackOrder: index,
     }));
 
   return {
-    players: [...mergedPlayers, ...leftoverOcrRows],
-    rosterFallbackPlayerCount: mergedPlayers.filter((player) => player.isRosterFallback).length,
-    matchedRosterPlayerCount: mergedPlayers.filter((player) => !player.isRosterFallback).length,
-    unmatchedOcrPlayerCount: leftoverOcrRows.length,
+    players: [...matchedByOcrOrder, ...leftoverRosterRows],
+    rosterFallbackPlayerCount: leftoverRosterRows.length,
+    matchedRosterPlayerCount: matchedByOcrOrder.filter((player) => !player.isOcrOnly).length,
+    unmatchedOcrPlayerCount: matchedByOcrOrder.filter((player) => player.isOcrOnly).length,
   };
 }
 
