@@ -734,6 +734,7 @@ export function ResultsScreen({
   const [historyOwnerFilter, setHistoryOwnerFilter] = React.useState("ALL");
   const [historyPosFilter, setHistoryPosFilter] = React.useState("ALL");
   const [historyTierFilter, setHistoryTierFilter] = React.useState("ALL");
+  const [matchTeamFilter, setMatchTeamFilter] = React.useState("ALL");
   const [fixturesState, setFixturesState] = React.useState(() => {
     const next = fixtures || {};
     const { _knockout, ...groupFixtures } = next;
@@ -798,6 +799,22 @@ export function ResultsScreen({
     () => buildLeagueTable(participants.map((participant) => participant.name), allFixtures, participantMeta),
     [participants, allFixtures, participantMeta]
   );
+  const matchTeamOptions = React.useMemo(
+    () => participants.map((participant) => participant.name).filter(Boolean),
+    [participants]
+  );
+
+  React.useEffect(() => {
+    if (matchTeamFilter !== "ALL" && !matchTeamOptions.includes(matchTeamFilter)) {
+      setMatchTeamFilter("ALL");
+      return;
+    }
+    if (matchTeamFilter !== "ALL") return;
+    if (isHost) return;
+    if (selectedName && matchTeamOptions.includes(selectedName)) {
+      setMatchTeamFilter(selectedName);
+    }
+  }, [isHost, matchTeamFilter, matchTeamOptions, selectedName]);
 
   const groupSections = React.useMemo(() => {
     const splitForSeason = seasonNumber >= 2 && fixtureLeg === "double";
@@ -816,6 +833,15 @@ export function ResultsScreen({
       return sections;
     });
   }, [resolvedGroups, resolvedFixturesByGroup, seasonNumber, fixtureLeg]);
+  const filteredGroupSections = React.useMemo(() => {
+    if (matchTeamFilter === "ALL") return groupSections;
+    return groupSections
+      .map((section) => ({
+        ...section,
+        fixtures: section.fixtures.filter((fixture) => fixture.home === matchTeamFilter || fixture.away === matchTeamFilter),
+      }))
+      .filter((section) => section.fixtures.length > 0);
+  }, [groupSections, matchTeamFilter]);
 
   const firstRoundComplete = React.useMemo(() => {
     if (!groupsEnabled || Object.keys(resolvedGroups).length === 0) return false;
@@ -1119,9 +1145,48 @@ export function ResultsScreen({
       view === "matches" && groupsEnabled && React.createElement(
         "div",
         { style: { display: "grid", gap: 18 } },
+        React.createElement("div", {
+          style: {
+            ...surfaceCard,
+            padding: 18,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 14,
+            flexWrap: "wrap",
+          }
+        },
+          React.createElement("div", null,
+            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 2 } }, "MATCH SELECTOR"),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 4 } }, isHost
+              ? "Host can edit scores and upload player stats for every fixture."
+              : "Pick a team to jump straight to its fixtures. You can edit/upload only for matches involving your team.")
+          ),
+          React.createElement("label", { style: { display: "grid", gap: 6, minWidth: 240 } },
+            React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, "Show matches for"),
+            React.createElement("select", {
+              value: matchTeamFilter,
+              onChange: (event) => setMatchTeamFilter(event.target.value),
+              style: {
+                background: "#09111b",
+                color: "#fff",
+                border: "1px solid #263247",
+                borderRadius: 10,
+                padding: "10px 12px",
+                fontFamily: "'Rajdhani'",
+                fontSize: 13,
+              }
+            },
+              React.createElement("option", { value: "ALL" }, "All teams"),
+              matchTeamOptions.map((teamName) => React.createElement("option", { key: teamName, value: teamName }, teamName))
+            )
+          )
+        ),
         groupSections.length === 0
           ? React.createElement("div", { style: { ...surfaceCard, padding: 28, textAlign: "center", fontFamily: "'Rajdhani'", color: "#718096" } }, "No fixtures configured for this season.")
-          : groupSections.map((section) => React.createElement(
+          : filteredGroupSections.length === 0
+            ? React.createElement("div", { style: { ...surfaceCard, padding: 28, textAlign: "center", fontFamily: "'Rajdhani'", color: "#718096" } }, "No fixtures found for the selected team.")
+            : filteredGroupSections.map((section) => React.createElement(
               "div",
               { key: section.id, style: { ...surfaceCard, padding: 20 } },
               React.createElement(

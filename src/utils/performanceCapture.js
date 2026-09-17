@@ -97,6 +97,24 @@ function cleanNameToken(token) {
     .replace(/[^A-Za-zÀ-ÖØ-öø-ÿ.\-'’]/g, "");
 }
 
+function normalizeDetectedPlayerName(value) {
+  const tokens = normalizeLine(value).split(" ").filter(Boolean);
+  if (tokens.length <= 1) return normalizeLine(value);
+
+  const nextTokens = [...tokens];
+  while (nextTokens.length > 1) {
+    const last = nextTokens[nextTokens.length - 1];
+    const alphaOnly = last.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
+    const hasStableEarlierToken = nextTokens.slice(0, -1).some((token) => token.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "").length >= 3);
+    const looksLikeTrailingNoise = alphaOnly.length <= 1
+      || ((alphaOnly.length <= 2 || /^[A-Z]{1,2}$/.test(alphaOnly)) && hasStableEarlierToken && !last.includes("."));
+    if (!looksLikeTrailingNoise) break;
+    nextTokens.pop();
+  }
+
+  return normalizeLine(nextTokens.join(" "));
+}
+
 function normalizePositionToken(token) {
   const value = String(token || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (POSITION_TOKENS.has(value)) return value;
@@ -143,15 +161,15 @@ function parsePlayerRowLine(line) {
     if (maybeStat !== null) statValues.push(maybeStat);
   }
 
-  const name = normalizeLine(nameTokens.join(" "));
+  const name = normalizeDetectedPlayerName(nameTokens.join(" "));
   const alphaOnlyName = name.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
-  if (!name || alphaOnlyName.length < 4 || rating === null) return null;
+  if (!name || alphaOnlyName.length < 4) return null;
 
   return {
     name,
-    rating,
-    goals: statValues.length > 0 ? statValues[0] : "",
-    assists: statValues.length > 1 ? statValues[1] : "",
+    rating: rating ?? "",
+    goals: rating !== null && statValues.length > 0 ? statValues[0] : "",
+    assists: rating !== null && statValues.length > 1 ? statValues[1] : "",
   };
 }
 

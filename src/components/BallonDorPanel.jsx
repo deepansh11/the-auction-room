@@ -53,6 +53,18 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
   });
 }
 
+function computeOcrQualityScore(text, parsed) {
+  const normalizedText = String(text || "").replace(/,/g, ".");
+  const lines = normalizedText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const rosterLines = lines.filter((line) => /^(GK|RB|LB|CB|RCB|LCB|RWB|LWB|CDM|RDM|LDM|CM|RCM|LCM|CAM|RAM|LAM|RM|LM|RW|LW|RF|LF|CF|ST|AM|DM)\b/i.test(line));
+  const decimalRatings = rosterLines.reduce((count, line) => count + (/\b(?:[4-9]\.\d|10(?:\.0)?)\b/.test(line) ? 1 : 0), 0);
+  const scoredRows = rosterLines.reduce((count, line) => count + (/\b(?:[4-9]\.\d|10(?:\.0)?)\b.*\b\d+\b.*\b\d+\b/.test(line) ? 1 : 0), 0);
+  const detectedCount = parsed.players.length - (parsed.missingVisiblePlayerCount || 0);
+  const ratedCount = (parsed.players || []).filter((player) => Number.isFinite(Number(player?.rating))).length;
+  const namedCount = (parsed.players || []).filter((player) => String(player?.name || "").trim()).length;
+  return (detectedCount * 1000) + (namedCount * 50) + (ratedCount * 15) + (decimalRatings * 12) + (scoredRows * 8);
+}
+
 function preprocessForOcr(file, crop, { contrast = 1.35, saturation = 1.2, threshold = 185 } = {}) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -106,6 +118,10 @@ async function scanRosterRegion(file) {
       crop: { x: 0.015, y: 0.135, width: 0.565, height: 0.79 },
       image: { contrast: 1.45, saturation: 1.1, threshold: 176 },
     },
+    {
+      crop: { x: 0.015, y: 0.27, width: 0.79, height: 0.61 },
+      image: { contrast: 1.45, saturation: 1.05, threshold: 170 },
+    },
   ];
 
   let bestResult = { text: "", parsed: emptyDraft(), detectedCount: 0, missingCount: Number.POSITIVE_INFINITY };
@@ -124,13 +140,20 @@ async function scanRosterRegion(file) {
     const parsed = parsePerformanceCaptureText(text);
     const detectedCount = parsed.players.length - (parsed.missingVisiblePlayerCount || 0);
     const missingCount = parsed.missingVisiblePlayerCount || 0;
+    const ratedCount = (parsed.players || []).filter((player) => Number.isFinite(Number(player?.rating))).length;
+    const qualityScore = computeOcrQualityScore(text, parsed);
+    const bestQualityScore = bestResult.qualityScore ?? Number.NEGATIVE_INFINITY;
     if (
-      detectedCount > bestResult.detectedCount
-      || (detectedCount === bestResult.detectedCount && missingCount < bestResult.missingCount)
+      qualityScore > bestQualityScore
+      || (
+        qualityScore === bestQualityScore
+        && (detectedCount > bestResult.detectedCount
+          || (detectedCount === bestResult.detectedCount && missingCount < bestResult.missingCount))
+      )
     ) {
-      bestResult = { text, parsed, detectedCount, missingCount };
+      bestResult = { text, parsed, detectedCount, missingCount, qualityScore };
     }
-    if (detectedCount >= 12 || (detectedCount >= 10 && missingCount === 0)) {
+    if (detectedCount >= 12 && ratedCount >= 10) {
       break;
     }
   }
@@ -228,6 +251,7 @@ export function BallonDorPanel({
   const [successMessage, setSuccessMessage] = React.useState("");
   const [copiedLink, setCopiedLink] = React.useState("");
   const [publicContext, setPublicContext] = React.useState({ loading: isPublicUpload, leagueName: "", participants: [], fixtures: [], fixedFixtureId: "" });
+  const [compactLayout, setCompactLayout] = React.useState(() => (typeof window !== "undefined" ? window.innerWidth < 720 : false));
   const fileInputRef = React.useRef(null);
 
   const resolvedLeagueName = isPublicUpload ? publicContext.leagueName : leagueName;
@@ -320,6 +344,14 @@ export function BallonDorPanel({
       setMappedParticipantName(resolvedParticipants[0].name);
     }
   }, [mappedParticipantName, resolvedParticipants]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const updateLayout = () => setCompactLayout(window.innerWidth < 720);
+    updateLayout();
+    window.addEventListener("resize", updateLayout);
+    return () => window.removeEventListener("resize", updateLayout);
+  }, []);
 
   React.useEffect(() => {
     if (mappedParticipantName || resolvedParticipants.length === 0) return;
@@ -575,26 +607,41 @@ export function BallonDorPanel({
               <div style={{ fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 2, marginBottom: 12 }}>Scanned Players</div>
               <div style={{ display: "grid", gap: 10 }}>
                 {(draft.players || []).map((player, index) => (
-                  <div key={player.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1.4fr) repeat(3,minmax(54px,.45fr)) auto auto auto", gap: 8, alignItems: "center", background: "#08111a", border: player.isManualPlaceholder ? "1px solid #FFD70055" : "1px solid #1e293b", borderRadius: 12, padding: 10 }}>
-                    <input value={player.name} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(player.id, "name", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "8px 10px", minWidth: 0 }} />
-                    <input value={player.rating} placeholder="RR" onChange={(event) => updatePlayer(player.id, "rating", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "8px 10px" }} />
-                    <input value={player.goals} placeholder="G" onChange={(event) => updatePlayer(player.id, "goals", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "8px 10px" }} />
-                    <input value={player.assists} placeholder="AST" onChange={(event) => updatePlayer(player.id, "assists", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "8px 10px" }} />
-                    {player.isManualPlaceholder ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#FFD700", fontWeight: 700 }}>MANUAL</div> : null}
-                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba" }}>
-                      <input type="radio" name="player-of-match" checked={Boolean(player.isPlayerOfTheMatch)} onChange={() => setDraft((prev) => ({ ...prev, players: (prev.players || []).map((entry) => ({ ...entry, isPlayerOfTheMatch: entry.id === player.id })) }))} />
-                      POTM
-                    </label>
-                    <button onClick={() => removeRow(player.id)} style={{ background: "transparent", color: "#ff8aa9", border: "1px solid #ff8aa944", borderRadius: 999, padding: "8px 10px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1 }}>REMOVE</button>
+                  <div key={player.id} style={{ display: "grid", gap: 10, background: "#08111a", border: player.isManualPlaceholder ? "1px solid #FFD70055" : "1px solid #1e293b", borderRadius: 12, padding: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <input value={player.name} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(player.id, "name", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "10px 12px", minWidth: 0, flex: "1 1 240px", width: "100%" }} />
+                      {player.isManualPlaceholder ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#FFD700", fontWeight: 700, letterSpacing: 1 }}>MANUAL</div> : null}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: compactLayout ? "repeat(3,minmax(0,1fr))" : "repeat(3,minmax(72px,110px)) minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
+                      {[
+                        { key: "rating", label: "RR", value: player.rating },
+                        { key: "goals", label: "G", value: player.goals },
+                        { key: "assists", label: "AST", value: player.assists },
+                      ].map((field) => (
+                        <label key={field.key} style={{ display: "grid", gap: 4 }}>
+                          <span style={{ fontFamily: "'Rajdhani'", fontSize: 10, color: "#7f8ea6" }}>{field.label}</span>
+                          <input value={field.value} placeholder={field.label} onChange={(event) => updatePlayer(player.id, field.key, event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "8px 10px", width: "100%", minWidth: 0 }} />
+                        </label>
+                      ))}
+                      <div style={{ display: "flex", justifyContent: compactLayout ? "space-between" : "flex-end", alignItems: compactLayout ? "center" : "flex-end", gap: 8, flexWrap: "wrap", gridColumn: compactLayout ? "1 / -1" : "auto" }}>
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", minHeight: 40 }}>
+                          <input type="radio" name="player-of-match" checked={Boolean(player.isPlayerOfTheMatch)} onChange={() => setDraft((prev) => ({ ...prev, players: (prev.players || []).map((entry) => ({ ...entry, isPlayerOfTheMatch: entry.id === player.id })) }))} />
+                          POTM
+                        </label>
+                        <button onClick={() => removeRow(player.id)} style={{ background: "transparent", color: "#ff8aa9", border: "1px solid #ff8aa944", borderRadius: 999, padding: "8px 14px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1, minHeight: 40 }}>
+                          REMOVE
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ))}
                 {(draft.players || []).length === 0 ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 13, color: "#7f8ea6" }}>Upload a player-table image or add rows manually.</div> : null}
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
-                <button onClick={handleSave} disabled={saving || ocrBusy || publicContext.loading} style={{ background: "linear-gradient(135deg,#FFD700,#fbbf24)", color: "#111827", border: "none", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1, opacity: saving || ocrBusy || publicContext.loading ? 0.6 : 1 }}>
+                <button onClick={handleSave} disabled={saving || ocrBusy || publicContext.loading} style={{ background: "linear-gradient(135deg,#FFD700,#fbbf24)", color: "#111827", border: "none", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1, opacity: saving || ocrBusy || publicContext.loading ? 0.6 : 1, flex: compactLayout ? "1 1 100%" : "0 0 auto" }}>
                   {saving ? "SAVING…" : "SAVE REVIEWED DATA"}
                 </button>
-                <button onClick={() => resetDraft({ preserveTeam: true })} style={{ background: "#0d1119", color: "#e8f7ef", border: "1px solid #263247", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1 }}>
+                <button onClick={() => resetDraft({ preserveTeam: true })} style={{ background: "#0d1119", color: "#e8f7ef", border: "1px solid #263247", borderRadius: 999, padding: "10px 18px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 14, letterSpacing: 1, flex: compactLayout ? "1 1 100%" : "0 0 auto" }}>
                   RESET
                 </button>
               </div>
