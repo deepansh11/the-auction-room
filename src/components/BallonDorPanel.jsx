@@ -477,6 +477,13 @@ export function BallonDorPanel({
   }), [draft, fixtureId, mappedParticipantName, resolvedFixtures, resolvedParticipants]);
   const validationHeadline = validation.warnings.length === 0 ? "Scan looks good." : validation.warnings[0];
   const validationExtraCount = Math.max(0, validation.warnings.length - 1);
+  const targetPlayerCount = 16;
+  const scannedPlayerCount = (draft.players || []).length;
+  const playerCountStatus = scannedPlayerCount === targetPlayerCount
+    ? "ready"
+    : scannedPlayerCount > targetPlayerCount
+      ? "overflow"
+      : "under";
 
   const processPickedImage = async (file) => {
     if (!file || !file.type?.startsWith("image/")) {
@@ -717,7 +724,7 @@ export function BallonDorPanel({
         <React.Fragment>
           <div style={bannerStyle()}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-              <div style={{ minWidth: 0 }}>
+               <div style={{ minWidth: 0 }}>
                <div style={{ fontFamily: "'Rajdhani'", fontSize: 10, color: validation.status === "ready" ? "#8fe7c0" : "#FFD700", fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase" }}>
                  {validation.status === "ready" ? "Ready to save" : "Needs review"}
                </div>
@@ -725,10 +732,30 @@ export function BallonDorPanel({
                  {validationHeadline}
                  {validationExtraCount > 0 ? ` +${validationExtraCount} more` : ""}
                </div>
-              </div>
-              <button onClick={() => setView("table")} style={{ background: "#0d1119", color: "#8ea0ba", border: "1px solid #263247", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1 }}>
-               TABLE
-              </button>
+               <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: playerCountStatus === "ready" ? "#8fe7c0" : "#f7d774", marginTop: 4 }}>
+                 Players: {scannedPlayerCount}/{targetPlayerCount}
+                 {playerCountStatus === "overflow" ? " — extra row detected" : playerCountStatus === "under" ? " — some rows are still missing" : ""}
+               </div>
+               </div>
+               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+               <span style={{
+                 fontFamily: "'Bebas Neue'",
+                 fontSize: 18,
+                 letterSpacing: 1,
+                 color: playerCountStatus === "ready" ? "#8fe7c0" : "#FFD700",
+                 background: playerCountStatus === "ready" ? "#8fe7c016" : "#FFD70014",
+                 border: `1px solid ${playerCountStatus === "ready" ? "rgba(143,231,192,.25)" : "#FFD70033"}`,
+                 borderRadius: 999,
+                 padding: "5px 10px",
+                 minWidth: 84,
+                 textAlign: "center",
+               }}>
+                 {scannedPlayerCount}/{targetPlayerCount}
+               </span>
+               <button onClick={() => setView("table")} style={{ background: "#0d1119", color: "#8ea0ba", border: "1px solid #263247", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1 }}>
+                 TABLE
+               </button>
+               </div>
             </div>
           </div>
 
