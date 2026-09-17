@@ -4,6 +4,10 @@ import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
 
 export function ShareScreen({ roomCode, onContinue }) {
+  React.useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, []);
+
   const [toast, setToast] = React.useState(null);
   const baseUrl = window.location.origin;
   const shareLink = `${baseUrl}?join=${roomCode}`;
@@ -23,7 +27,7 @@ export function ShareScreen({ roomCode, onContinue }) {
   };
 
   return React.createElement("div", {
-    style:{ minHeight:"100vh", background:"#04060a", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }
+    style:{ minHeight:"100vh", background:"transparent", display:"flex", alignItems:"center", justifyContent:"center", padding:20 }
   },
     toast && React.createElement(Toast, toast),
     React.createElement("div", { style:{ width:"100%", maxWidth:500, animation:"fadeUp .5s ease", textAlign:"center" } },

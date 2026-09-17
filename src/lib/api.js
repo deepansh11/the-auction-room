@@ -1,3 +1,5 @@
+import { normalizeResultRecord, normalizeSessionRecord } from "../utils/sessionData.js";
+
 const API_BASE_URL =
   (typeof import.meta !== "undefined" && import.meta?.env?.VITE_API_BASE_URL)
     ? String(import.meta.env.VITE_API_BASE_URL).replace(/\/$/, "")
@@ -7,6 +9,27 @@ function requireBaseUrl() {
   if (!API_BASE_URL) {
     throw new Error("VITE_API_BASE_URL is not configured");
   }
+}
+
+function buildRequestError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = status === 401 ? "AUTH_EXPIRED" : "REQUEST_FAILED";
+  return error;
+}
+
+function notifyAuthExpired(error) {
+  if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+  window.dispatchEvent(new CustomEvent("fc:auth-expired", {
+    detail: {
+      message: error.message,
+      status: error.status || 401,
+    },
+  }));
+}
+
+export function isAuthExpiredError(error) {
+  return Number(error?.status) === 401 || error?.code === "AUTH_EXPIRED";
 }
 
 async function request(path, { method = "GET", body, token } = {}) {
@@ -38,7 +61,11 @@ async function request(path, { method = "GET", body, token } = {}) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error || `Request failed: ${res.status}`);
+    const error = buildRequestError(data?.error || `Request failed: ${res.status}`, res.status);
+    if (token && res.status === 401) {
+      notifyAuthExpired(error);
+    }
+    throw error;
   }
   return data;
 }
@@ -99,12 +126,12 @@ export async function apiCreateRoom(spec, token) {
   };
 
   const data = await request("/api/rooms", { method: "POST", body: { spec: roomSpec }, token });
-  return data?.session;
+  return normalizeSessionRecord(data?.session);
 }
 
 export async function apiGetRoom(roomCode, token) {
   const data = await request(`/api/rooms/${encodeURIComponent(roomCode)}`, { token });
-  return data?.session;
+  return normalizeSessionRecord(data?.session);
 }
 
 export async function apiJoinRoom(roomCode, username, token) {
@@ -113,22 +140,22 @@ export async function apiJoinRoom(roomCode, username, token) {
     body: { username },
     token,
   });
-  return data?.session;
+  return normalizeSessionRecord(data?.session);
 }
 
 export async function apiListSessions(username, token) {
   const data = await request(`/api/sessions?username=${encodeURIComponent(username)}`, { token });
-  return Array.isArray(data?.sessions) ? data.sessions : [];
+  return Array.isArray(data?.sessions) ? data.sessions.map(normalizeSessionRecord) : [];
 }
 
 export async function apiListResults(username, token) {
   const data = await request(`/api/results?username=${encodeURIComponent(username)}`, { token });
-  return Array.isArray(data?.results) ? data.results : [];
+  return Array.isArray(data?.results) ? data.results.map(normalizeResultRecord) : [];
 }
 
 export async function apiGetSession(sessionId, token) {
   const data = await request(`/api/sessions/${encodeURIComponent(sessionId)}`, { token });
-  return data?.session;
+  return normalizeSessionRecord(data?.session);
 }
 
 export async function apiUpdateSession(sessionId, session, token) {
@@ -163,7 +190,7 @@ export async function apiReadmitPlayer(roomCode, username, token) {
     body: { username },
     token,
   });
-  return data?.session;
+  return normalizeSessionRecord(data?.session);
 }
 
 export async function apiAbandonSession(sessionId, token) {
@@ -172,6 +199,19 @@ export async function apiAbandonSession(sessionId, token) {
     token,
   });
   return data?.session;
+}
+
+export async function apiGetSessionBackup(sessionId, token) {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/backup`, { token });
+}
+
+export async function apiRestoreSessionBackup(backup, token) {
+  const data = await request("/api/sessions/restore", {
+    method: "POST",
+    body: { backup },
+    token,
+  });
+  return normalizeSessionRecord(data?.session);
 }
 
 export async function apiSaveAuctionPoints(auctionResultId, pointsData, token) {
@@ -186,6 +226,64 @@ export async function apiSaveAuctionPoints(auctionResultId, pointsData, token) {
 export async function apiGetAuctionPoints(auctionResultId, token) {
   const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/points`, { token });
   return Array.isArray(data?.points) ? data.points : [];
+}
+
+export async function apiGetBallonDorSubmissions(auctionResultId, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/ballon-dor-submissions`, { token });
+  return Array.isArray(data?.submissions) ? data.submissions : [];
+}
+
+export async function apiCreateBallonDorUploadLink(auctionResultId, token) {
+  return request(`/api/results/${encodeURIComponent(auctionResultId)}/ballon-dor-upload-link`, {
+    method: "POST",
+    token,
+  });
+}
+
+export async function apiCreateFixtureBallonDorUploadLink(auctionResultId, fixtureId, token) {
+  return request(`/api/results/${encodeURIComponent(auctionResultId)}/ballon-dor-upload-link`, {
+    method: "POST",
+    body: { fixtureId },
+    token,
+  });
+}
+
+export async function apiSaveBallonDorSubmission(auctionResultId, submission, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/ballon-dor-submissions`, {
+    method: "POST",
+    body: { submission },
+    token,
+  });
+  return data?.submission;
+}
+
+export async function apiGetPublicBallonDorUploadContext(auctionResultId, uploadToken, fixtureId = "") {
+  const suffix = fixtureId ? `&fixtureId=${encodeURIComponent(fixtureId)}` : "";
+  const data = await request(`/api/public/results/${encodeURIComponent(auctionResultId)}/ballon-dor-upload?token=${encodeURIComponent(uploadToken)}${suffix}`);
+  return {
+    auctionResultId: data?.auctionResultId || auctionResultId,
+    leagueName: data?.leagueName || "League",
+    participantNames: Array.isArray(data?.participantNames) ? data.participantNames : [],
+    fixtures: Array.isArray(data?.fixtures) ? data.fixtures : [],
+    fixedFixtureId: data?.fixedFixtureId || fixtureId || "",
+  };
+}
+
+export async function apiSavePublicBallonDorSubmission(auctionResultId, submission, uploadToken, fixtureId = "") {
+  const suffix = fixtureId ? `&fixtureId=${encodeURIComponent(fixtureId)}` : "";
+  const data = await request(`/api/public/results/${encodeURIComponent(auctionResultId)}/ballon-dor-submissions?token=${encodeURIComponent(uploadToken)}${suffix}`, {
+    method: "POST",
+    body: { submission },
+  });
+  return data?.submission;
+}
+
+export async function apiSaveFixtureScore(auctionResultId, groupLabel, fixtureId, homeGoals, awayGoals, token) {
+  return request(`/api/results/${encodeURIComponent(auctionResultId)}/fixtures/${encodeURIComponent(fixtureId)}/score`, {
+    method: "PUT",
+    body: { groupLabel, homeGoals, awayGoals },
+    token,
+  });
 }
 
 export async function apiSaveFixtures(auctionResultId, fixtures, token) {
@@ -205,4 +303,27 @@ export async function apiGetFixtures(auctionResultId, token) {
 export async function apiGetLeaderboard(token) {
   const data = await request("/api/leaderboard", { token });
   return Array.isArray(data?.leaderboard) ? data.leaderboard : [];
+}
+
+export async function apiDeleteResult(auctionResultId, token) {
+  await request(`/api/results/${encodeURIComponent(auctionResultId)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+export async function apiStartTransferWindow(auctionResultId, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/transfer-window`, {
+    method: "POST",
+    token,
+  });
+  return normalizeSessionRecord(data?.session);
+}
+
+export async function apiOpenTransferMarket(sessionId, token) {
+  const data = await request(`/api/sessions/${encodeURIComponent(sessionId)}/transfer/open-market`, {
+    method: "POST",
+    token,
+  });
+  return normalizeSessionRecord(data?.session);
 }

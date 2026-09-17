@@ -4,11 +4,11 @@ import { sfx } from "../utils/sfx.js";
 import { apiGetSession, apiUpdateSession } from "../lib/api.js";
 import { subscribeToSessionStream } from "../lib/realtime.js";
 import { PCOLORS } from "../game/constants.js";
+import { TeamBadge, getParticipantAccent } from "../theme/footballTheme.js";
 
 export function DrawScreen({ session, onComplete, onAbandon, user }) {
   const [liveSession, setLiveSession] = React.useState(session);
   const syncNowRef = React.useRef(() => {});
-  const cols = ["#FFD700","#4FC3F7","#FF6B35","#00FF88","#FF3D71","#C084FC"];
   const isHost = !!user && liveSession.host === user.username;
 
   React.useEffect(() => {
@@ -122,12 +122,17 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
     };
   }, [session.id, onComplete, onAbandon, user?.username, user?.token]);
 
-  const totalCount = liveSession.participants?.length || 0;
-  const phase = Number(liveSession.drawPhase || 0);
-  const shown = phase === 0
-    ? (Array.isArray(liveSession.lotOrder) ? liveSession.lotOrder : [])
-    : (Array.isArray(liveSession.sequence) ? liveSession.sequence : []);
-  const lotRevealComplete = phase === 0 && shown.length >= totalCount;
+  const participantNames = Array.isArray(liveSession.participantNames) && liveSession.participantNames.length > 0
+    ? liveSession.participantNames
+    : (Array.isArray(liveSession.participants) ? liveSession.participants.map((participant) => participant.name) : []);
+  const totalCount = participantNames.length || liveSession.participants?.length || 0;
+  const shown = Array.isArray(liveSession.sequence) ? liveSession.sequence : [];
+  const participantAccentMap = new Map(
+    participantNames.map((name, index) => [name, getParticipantAccent(index)])
+  );
+  const participantStripNames = participantNames.length > 0 && participantNames.every((name, index) => name === shown[index])
+    ? [...participantNames].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
+    : participantNames;
 
   const persistDrawState = async (patch) => {
     if (!isHost) return;
@@ -143,24 +148,11 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
   const next = async () => {
     if (!isHost) return;
     sfx("reveal");
-    if (phase === 0) {
-      if (shown.length >= totalCount) return;
-      const nextCount = Math.min(shown.length + 1, totalCount);
-      await persistDrawState({ revealedLotCount: nextCount });
-      if (nextCount === totalCount) {
-        setTimeout(() => {
-          // The true pick order was already generated (and hidden) server-side at creation —
-          // no shuffling happens here, just move on to revealing it.
-          persistDrawState({ drawPhase: 1, revealedPickCount: 0 });
-        }, 600);
-      }
-    } else {
-      const nextCount = Math.min(shown.length + 1, totalCount);
-      await persistDrawState({ revealedPickCount: nextCount });
-    }
+    const nextCount = Math.min(shown.length + 1, totalCount);
+    await persistDrawState({ drawPhase: 1, revealedPickCount: nextCount });
   };
 
-  const done = phase===1 && shown.length===totalCount;
+  const done = shown.length===totalCount;
 
   const startBidding = async () => {
     if (!isHost) return;
@@ -174,14 +166,14 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
   };
 
   return React.createElement("div", {
-    style:{ minHeight:"100vh", background:"#04060a", display:"flex", alignItems:"center",
+    style:{ minHeight:"100vh", background:"transparent", display:"flex", alignItems:"center",
       justifyContent:"center", padding:20 }
   },
     React.createElement("div", { style:{ width:"100%", maxWidth:560, textAlign:"center", animation:"fadeUp .4s ease" } },
       React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:46, color:"#fff", letterSpacing:4, marginBottom:6 } },
-        phase===0 ? "LOT ORDER" : "PICK SEQUENCE"),
+        "PICK SEQUENCE"),
       React.createElement("p", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555", letterSpacing:2, marginBottom:22 } },
-        phase===0 ? "Host reveals each lot position" : "First-pick order per lot"),
+        "The host reveals the first-pick order while lot numbers stay in normal order."),
       liveSession.roomCode && React.createElement("div", { style:{
         display:"inline-block",
         background:"#0d0f16",
@@ -196,57 +188,47 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
       } }, `ROOM ${liveSession.roomCode}`),
 
       React.createElement("div", { style:{ display:"flex", justifyContent:"center", gap:8, marginBottom:14, flexWrap:"wrap" } },
-        liveSession.participants?.map((p, i) =>
-          React.createElement("span", { key:p.name, style:{
-            fontFamily:"'Rajdhani'", fontSize:11, color:PCOLORS[i % PCOLORS.length],
-            background:"#0d0f16", border:"1px solid #1e2230", borderRadius:999,
-            padding:"4px 10px"
-          } }, p.name)
+        participantStripNames.map((name) =>
+          React.createElement("span", { key:name, style:{
+            fontFamily:"'Rajdhani'", fontSize:11, color:participantAccentMap.get(name) || "#8fe7c0",
+            background:"#0d0f16", border:`1px solid ${(participantAccentMap.get(name) || "#8fe7c0")}44`, borderRadius:999,
+            padding:"4px 10px", display:"inline-flex", alignItems:"center", gap:6
+          } },
+            React.createElement(TeamBadge, { name, color: participantAccentMap.get(name) || "#8fe7c0", size: 20, subtle: true }),
+            name
+          )
         )
       ),
 
-      phase===0 && React.createElement("div", { style:{ display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap", marginBottom:22 } },
-        Array.from({ length: totalCount }, (_, i) =>
-          i < shown.length
-            ? React.createElement("div", { key:i, style:{
-                width:58, height:58, borderRadius:10, background:cols[i % cols.length],
-                display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-                color:"#000", animation:"flipCard .4s ease both", fontFamily:"'Bebas Neue'"
-              }},
-                React.createElement("span", { style:{ fontSize:9, letterSpacing:1 } }, "LOT"),
-                React.createElement("span", { style:{ fontSize:26, lineHeight:1 } }, shown[i])
-              )
-            : React.createElement("div", { key:i, style:{ width:58, height:58, borderRadius:10,
-                background:"#0d0f16", border:"2px dashed #1e2028" } })
-        )
-      ),
-
-      phase===1 && React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:7, marginBottom:22 } },
+      React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:7, marginBottom:22 } },
         Array.from({ length: totalCount }, (_, i) =>
           i < shown.length
             ? React.createElement("div", { key:i, style:{
                 display:"flex", alignItems:"center", gap:12,
-                background:"#0d0f16", border:`1px solid ${PCOLORS[i % PCOLORS.length]}44`,
+              background:"#0d0f16", border:`1px solid ${(participantAccentMap.get(shown[i]) || getParticipantAccent(i))}44`,
                 borderRadius:9, padding:"10px 14px", animation:"slideR .4s ease both"
               }},
-                React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:PCOLORS[i % PCOLORS.length], width:28 } }, `#${i+1}`),
+              React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:participantAccentMap.get(shown[i]) || getParticipantAccent(i), width:28 } }, `#${i+1}`),
                 React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:15, fontWeight:700, color:"#fff" } }, shown[i]),
                 i===0 && React.createElement("span", { style:{ marginLeft:"auto", fontFamily:"'Rajdhani'", fontSize:10,
                   color:"#FFD700", fontWeight:700, letterSpacing:1 } }, "OPENS FIRST")
               )
-            : null
+            : React.createElement("div", { key:i, style:{
+                display:"flex", alignItems:"center", gap:12,
+                background:"#0d0f16", border:"1px dashed #1e2230",
+                borderRadius:9, padding:"10px 14px", opacity:0.6
+              }},
+              React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:"#5b677c", width:28 } }, `#${i+1}`),
+              React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#5b677c" } }, "Hidden until revealed")
+            )
         )
       ),
 
       !done
         ? isHost
-          ? lotRevealComplete
-            ? React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "Preparing pick sequence…")
-            : React.createElement("button", { style:BTN.gold, onClick:next },
-                phase===0
-                  ? shown.length===0 ? "REVEAL LOT 1" : `REVEAL LOT ${shown.length+1}`
-                  : shown.length===0 ? "REVEAL PICKS" : `REVEAL #${shown.length+1}`
-              )
+          ? React.createElement("button", { style:BTN.gold, onClick:next },
+              shown.length===0 ? "REVEAL PICKS" : `REVEAL #${shown.length+1}`
+            )
           : React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "⏳ Waiting for host reveal…")
         : isHost
           ? React.createElement("button", { style:BTN.gold, onClick:startBidding }, "START BIDDING 🔥")

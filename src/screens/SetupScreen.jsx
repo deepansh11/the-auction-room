@@ -6,8 +6,21 @@ import { BUDGET, MYSTERY_CARD_PRICE, PCOLORS, TIERS, getTierKey } from "../game/
 import { cloneTierConfig, normalizeTiers } from "../game/tierUtils.js";
 import { generateRoomCode } from "../utils/roomUtils.js";
 import { ShareScreen } from "./ShareScreen.jsx";
+import { FOOTBALL_THEME, createSurfaceStyle } from "../theme/footballTheme.js";
 
-export function SetupScreen({ user, onStart }) {
+export function SetupScreen({ user, onStart, onBackToDiscover }) {
+  const scrollRef = React.useRef(null);
+
+  React.useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    scrollRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    const raf = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      scrollRef.current?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
+
   const [sessionName, setSessionName] = React.useState(`${user.username}'s Auction`);
   const [count, setCount] = React.useState(5);
   const [names, setNames] = React.useState(Array.from({length:5}, (_,i) => i===0 ? user.username : `Player ${i+1}`));
@@ -24,12 +37,24 @@ export function SetupScreen({ user, onStart }) {
   const [groupCount, setGroupCount] = React.useState(2);
   const [fixtureLeg, setFixtureLeg] = React.useState("single");
   const [knockoutFormat, setKnockoutFormat] = React.useState("quarterFinal");
+  const [showAdvanced, setShowAdvanced] = React.useState(true);
   const [showShare, setShowShare] = React.useState(false);
   const [sessionData, setSessionData] = React.useState(null);
   const [copyStatus, setCopyStatus] = React.useState("");
   const [creatingRoom, setCreatingRoom] = React.useState(false);
   const PLAYERS_PER_PERSON = 26;
   const shareLink = `${window.location.origin}?join=${roomCode}`;
+  const fieldStyle = {
+    background: "rgba(16,24,36,.96)",
+    border: "1px solid rgba(143,231,192,.32)",
+    borderRadius: 8,
+    padding: "10px 14px",
+    color: "#f4fbf8",
+    fontSize: 14,
+    fontFamily: "'Exo 2'",
+    outline: "none",
+    boxShadow: "0 0 0 1px rgba(79,195,247,.08), inset 0 1px 0 rgba(255,255,255,.04)"
+  };
 
   const copyValue = async (text, label) => {
     try {
@@ -141,31 +166,45 @@ export function SetupScreen({ user, onStart }) {
   }
 
   return React.createElement("div", {
-    style:{ minHeight:"100vh", background:"#04060a", display:"flex", alignItems:"center",
-      justifyContent:"center", padding:20 }
+    ref: scrollRef,
+    style:{ minHeight:"100vh", background:"transparent", display:"flex", alignItems:"flex-start",
+      justifyContent:"center", padding:"20px 18px 32px" }
   },
-    React.createElement("div", { style:{ width:"100%", maxWidth:480, animation:"fadeUp .5s ease" } },
-      React.createElement("div", { style:{ textAlign:"center", marginBottom:32 } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:56, color:"#fff", letterSpacing:5, lineHeight:.9 } }, "NEW AUCTION"),
-        React.createElement("div", { style:{ width:50, height:2, background:"#FFD700", margin:"12px auto 0", borderRadius:1 } })
+    React.createElement("div", { style:{
+      width:"100%",
+      maxWidth:1180,
+      animation:"fadeUp .5s ease",
+      ...createSurfaceStyle({ padding: 18, radius: 24, elevated: true }),
+      background:"linear-gradient(180deg, rgba(10,16,24,.97), rgba(7,12,19,.97))",
+      border:"1px solid rgba(79,195,247,.18)",
+      boxShadow:"0 32px 90px rgba(0,0,0,.55)"
+    } },
+      React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:14, marginBottom:18, flexWrap:"wrap" } },
+        onBackToDiscover && React.createElement("button", {
+          onClick: onBackToDiscover,
+          style:{ ...BTN.ghost, background:"rgba(8,18,13,.78)", borderColor:"rgba(143,231,192,.16)" }
+        }, "← HOME"),
+        React.createElement("div", { style:{ minWidth:0 } },
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:44, color:FOOTBALL_THEME.text, letterSpacing:5, lineHeight:.9 } }, "NEW AUCTION"),
+          React.createElement("div", { style:{ width:50, height:2, background:`linear-gradient(90deg, ${FOOTBALL_THEME.cyan}, ${FOOTBALL_THEME.gold})`, marginTop:10, borderRadius:1 } })
+        )
       ),
-      React.createElement("div", { style:{ marginBottom:18 } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:3, marginBottom:5 } }, "AUCTION NAME"),
+      React.createElement("div", { style:{ marginBottom:16, ...createSurfaceStyle({ padding: 12, radius: 16, elevated: true }), background:"rgba(12,20,31,.96)", border:"1px solid rgba(79,195,247,.18)" } },
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#b7cae3", letterSpacing:3, marginBottom:5 } }, "AUCTION NAME"),
         React.createElement("input", {
           value: sessionName, onChange: e => setSessionName(e.target.value),
-          style:{ width:"100%", background:"#0d0f16", border:"1px solid #1e2230",
-            borderRadius:8, padding:"10px 14px", color:"#fff", fontSize:14,
-            fontFamily:"'Exo 2'", outline:"none" }
+          style:{ ...fieldStyle, width:"100%" }
         })
       ),
-      React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:"1px solid #1e2230", borderRadius:10, padding:10 } },
+      React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(320px, 1fr))", gap:16, alignItems:"start" } },
+      React.createElement("div", { style:{ marginBottom:16, ...createSurfaceStyle({ padding: 10, radius: 16 }), background:"rgba(12,20,31,.96)", border:"1px solid rgba(79,195,247,.16)" } },
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 } },
-          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:3 } }, "ROOM CODE"),
-          copyStatus && React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#00FF88", fontWeight:700 } }, copyStatus)
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#b7cae3", letterSpacing:3 } }, "ROOM CODE"),
+          copyStatus && React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#8fe7c0", fontWeight:700 } }, copyStatus)
         ),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr auto auto", gap:8, marginBottom:8 } },
-          React.createElement("div", { style:{ background:"#0d0f16", border:"2px solid #FFD700", borderRadius:8, padding:"8px 10px",
-            fontFamily:"'Bebas Neue'", fontSize:22, color:"#FFD700", letterSpacing:3, textAlign:"center" } }, roomCode),
+          React.createElement("div", { style:{ background:"rgba(8,18,13,.92)", border:"1px solid rgba(143,231,192,.18)", borderRadius:8, padding:"8px 10px",
+            fontFamily:"'Bebas Neue'", fontSize:22, color:"#8fe7c0", letterSpacing:3, textAlign:"center", minHeight:41 } }, roomCode),
           React.createElement("button", {
             type:"button",
             onClick: () => copyValue(roomCode, "Code"),
@@ -177,11 +216,11 @@ export function SetupScreen({ user, onStart }) {
             style:{ ...BTN.ghost, padding:"8px 10px", fontSize:11 }
           }, "REGEN")
         ),
-        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666", marginBottom:6 } },
-          "Share this code before starting. The room becomes joinable as soon as you continue and spin the draw."
+        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#b7cae3", marginBottom:6 } },
+          "Share this code before starting. The room becomes joinable as soon as you continue to the pick-sequence reveal."
         ),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr auto", gap:8 } },
-          React.createElement("div", { style:{ background:"#0d0f16", border:"1px solid #1e2230", borderRadius:8, padding:"8px 10px", fontFamily:"'Rajdhani'", fontSize:11, color:"#888", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" } }, shareLink),
+          React.createElement("div", { style:{ background:"rgba(8,18,13,.92)", border:"1px solid rgba(143,231,192,.14)", borderRadius:8, padding:"8px 10px", fontFamily:"'Rajdhani'", fontSize:11, color:"#c6d2ca", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" } }, shareLink),
           React.createElement("button", {
             type:"button",
             onClick: () => copyValue(shareLink, "Link"),
@@ -189,134 +228,140 @@ export function SetupScreen({ user, onStart }) {
           }, "COPY LINK")
         )
       ),
-      React.createElement("div", { style:{ marginBottom:18 } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:3, marginBottom:6 } }, "PARTICIPANTS"),
-        React.createElement("div", { style:{ display:"flex", gap:5 } },
+      React.createElement("div", { style:{ marginBottom:16 } },
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#b7cae3", letterSpacing:3, marginBottom:6 } }, "PARTICIPANTS"),
+        React.createElement("div", { style:{ display:"flex", gap:5, flexWrap:"wrap" } },
           [2,3,4,5,6,7,8,9,10].map(n =>
             React.createElement("button", { key:n, onClick: () => updateCount(n), style:{
-              flex:1, background: count===n ? "#FFD700" : "#0d0f16",
-              color: count===n ? "#000" : "#888",
-              border:`1px solid ${count===n ? "#FFD700" : "#1e2028"}`,
+              flex:"1 1 64px", background: count===n ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "rgba(8,18,13,.92)",
+              color: count===n ? "#07110c" : "#c6d2ca",
+              border:`1px solid ${count===n ? "rgba(79,195,247,.45)" : "rgba(143,231,192,.14)"}`,
               borderRadius:7, padding:"8px 0", cursor:"pointer",
               fontFamily:"'Bebas Neue'", fontSize:15
             }}, n)
           )
         ),
-        React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", fontFamily:"'Rajdhani'", fontSize:11, color:"#444", marginTop:5 } },
+        React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", fontFamily:"'Rajdhani'", fontSize:11, color:"#b7cae3", marginTop:5 } },
           React.createElement("div", null,
             `${selectedPlayers.length} players · ~${Math.round(Math.max(selectedPlayers.length,1)/count)} per person · ${count} lots`),
           React.createElement("div", { style:{ color: poolHealthy ? "#00FF88" : "#FF6B35" } })
         )
       ),
-      React.createElement("div", { style:{ marginBottom:18 } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:3, marginBottom:6 } }, "TOTAL BUDGET PER BIDDER"),
+      React.createElement("div", { style:{ marginBottom:16 } },
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#b7cae3", letterSpacing:3, marginBottom:6 } }, "TOTAL BUDGET PER BIDDER"),
         React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
           React.createElement("input", {
             type:"number", value:budget, onChange: e => setBudget(Math.max(1, Number(e.target.value))),
-            style:{ flex:1, background:"#0d0f16", border:"1px solid #1e2230",
-              borderRadius:8, padding:"10px 14px", color:"#fff", fontSize:14,
-              fontFamily:"'Exo 2'", outline:"none" }
+            style:{ ...fieldStyle, flex:1 }
           }),
-          React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:"#FFD700", letterSpacing:2 } }, "M")
+          React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:"#8fe7c0", letterSpacing:2 } }, "M")
         )
       ),
-      React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:`1px solid ${mysteryEnabled ? "#FFD70044" : "#1e2230"}`, borderRadius:10, padding:12 } },
+      React.createElement("div", { style:{ marginBottom:16, ...createSurfaceStyle({ padding: 12, radius: 16 }), border:`1px solid ${mysteryEnabled ? "rgba(143,231,192,.30)" : "rgba(255,255,255,.12)"}`, background:"rgba(12,20,31,.96)" } },
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center" } },
           React.createElement("div", null,
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#FFD700", letterSpacing:2, marginBottom:3 } }, "MYSTERY CARD"),
-            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666", maxWidth:300 } },
+            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#8fe7c0", letterSpacing:2, marginBottom:3 } }, "MYSTERY CARD"),
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#b7cae3", maxWidth:300 } },
               `Each bidder can spend ${MYSTERY_CARD_PRICE}M once to reveal a random S/S+ tier player, unique to them.`)
           ),
           React.createElement("button", {
             type:"button",
             onClick: () => setMysteryEnabled(v => !v),
             style:{
-              width:52, height:28, borderRadius:14, border:"none", cursor:"pointer", position:"relative",
-              background: mysteryEnabled ? "#FFD700" : "#1e2230", flexShrink:0, transition:"background .2s"
+              width:52, height:28, borderRadius:14, border:"1px solid rgba(143,231,192,.18)", cursor:"pointer", position:"relative",
+              background: mysteryEnabled ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "rgba(8,18,13,.92)", flexShrink:0, transition:"background .2s"
             }
           },
             React.createElement("span", { style:{
               position:"absolute", top:3, left: mysteryEnabled ? 27 : 3, width:22, height:22, borderRadius:"50%",
-              background:"#04060a", transition:"left .2s"
+              background:"#07110c", transition:"left .2s"
             } })
           )
         )
       ),
-      React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:`1px solid ${groupsEnabled ? "#4FC3F744" : "#1e2230"}`, borderRadius:10, padding:12 } },
+      React.createElement("div", { style:{ marginBottom:16, ...createSurfaceStyle({ padding: 12, radius: 16 }), border:`1px solid ${groupsEnabled ? "rgba(79,195,247,.32)" : "rgba(255,255,255,.12)"}`, background:"rgba(12,20,31,.96)" } },
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: groupsEnabled ? 10 : 0 } },
           React.createElement("div", null,
             React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#4FC3F7", letterSpacing:2, marginBottom:3 } }, "🏆 GROUP STAGE"),
-            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666", maxWidth:300 } },
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#b7cae3", maxWidth:300 } },
               "Split bidders into groups with randomised round-robin fixtures, played after the draft.")
           ),
           React.createElement("button", {
             type:"button",
             onClick: () => setGroupsEnabled(v => !v),
             style:{
-              width:52, height:28, borderRadius:14, border:"none", cursor:"pointer", position:"relative",
-              background: groupsEnabled ? "#4FC3F7" : "#1e2230", flexShrink:0, transition:"background .2s"
+              width:52, height:28, borderRadius:14, border:"1px solid rgba(79,195,247,.18)", cursor:"pointer", position:"relative",
+              background: groupsEnabled ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "rgba(8,18,13,.92)", flexShrink:0, transition:"background .2s"
             }
           },
             React.createElement("span", { style:{
               position:"absolute", top:3, left: groupsEnabled ? 27 : 3, width:22, height:22, borderRadius:"50%",
-              background:"#04060a", transition:"left .2s"
+              background:"#07110c", transition:"left .2s"
             } })
           )
         ),
         groupsEnabled && React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
-          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } }, "NUMBER OF GROUPS"),
+          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#8ea0ba" } }, "NUMBER OF GROUPS"),
           React.createElement("div", { style:{ display:"flex", gap:5 } },
             maxGroupOptions.map(n =>
               React.createElement("button", { key:n, type:"button", onClick: () => setGroupCount(n), style:{
-                background: groupCount===n ? "#4FC3F7" : "#0d0f16",
-                color: groupCount===n ? "#000" : "#888",
-                border:`1px solid ${groupCount===n ? "#4FC3F7" : "#1e2028"}`,
+                background: groupCount===n ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "rgba(8,18,13,.92)",
+                color: groupCount===n ? "#07110c" : "#c6d2ca",
+                border:`1px solid ${groupCount===n ? "rgba(79,195,247,.45)" : "rgba(143,231,192,.14)"}`,
                 borderRadius:6, padding:"4px 12px", cursor:"pointer",
                 fontFamily:"'Bebas Neue'", fontSize:13
               }}, n===1 ? "SINGLE" : n)
             )
           ),
-          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#444" } },
+          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#6d7d73" } },
             `≈${Math.ceil(count / groupCount)} teams per group`),
           React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, marginTop:8, width:"100%" } },
-            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } }, "FIXTURE LEGS"),
+            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#8ea0ba" } }, "FIXTURE LEGS"),
             ["single", "double"].map((leg) =>
               React.createElement("button", { key:leg, type:"button", onClick: () => setFixtureLeg(leg), style:{
-                background: fixtureLeg===leg ? "#4FC3F7" : "#0d0f16",
-                color: fixtureLeg===leg ? "#000" : "#888",
-                border:`1px solid ${fixtureLeg===leg ? "#4FC3F7" : "#1e2028"}`,
+                background: fixtureLeg===leg ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "rgba(8,18,13,.92)",
+                color: fixtureLeg===leg ? "#07110c" : "#c6d2ca",
+                border:`1px solid ${fixtureLeg===leg ? "rgba(79,195,247,.45)" : "rgba(143,231,192,.14)"}`,
                 borderRadius:6, padding:"4px 12px", cursor:"pointer",
                 fontFamily:"'Bebas Neue'", fontSize:13
               }}, leg === "single" ? "1 LEG" : "2 LEGS")
             ),
-            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#444" } },
+            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#6d7d73" } },
               fixtureLeg === "double" ? "Home + Away for every match" : "One match per pair")
           ),
           // KNOCKOUT FORMAT
           React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, marginTop:8, width:"100%", flexWrap:"wrap" } },
-            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#666" } }, "KNOCKOUT FORMAT"),
+            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#8ea0ba" } }, "KNOCKOUT FORMAT"),
             [
               { key: "semiFinal",    label: "SEMI FINALS",    desc: `top ${Math.max(1, Math.round(4/groupCount))}/group` },
               { key: "quarterFinal", label: "QUARTER FINALS", desc: `top 4/group` },
               { key: "finalOnly",    label: "FINAL ONLY",     desc: `top 1/group` },
             ].map(({ key, label, desc }) =>
               React.createElement("button", { key, type:"button", onClick: () => setKnockoutFormat(key), style:{
-                background: knockoutFormat===key ? "#FFD700" : "#0d0f16",
-                color:      knockoutFormat===key ? "#000"    : "#888",
-                border:    `1px solid ${knockoutFormat===key ? "#FFD700" : "#1e2028"}`,
+                background: knockoutFormat===key ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "rgba(8,18,13,.92)",
+                color:      knockoutFormat===key ? "#07110c"    : "#c6d2ca",
+                border:    `1px solid ${knockoutFormat===key ? "rgba(79,195,247,.45)" : "rgba(143,231,192,.14)"}`,
                 borderRadius:6, padding:"4px 12px", cursor:"pointer",
                 fontFamily:"'Bebas Neue'", fontSize:13
               }},
                 `${label}`,
                 React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700,
-                  color: knockoutFormat===key ? "#00000088" : "#444",
+                  color: knockoutFormat===key ? "#07110c88" : "#6d7d73",
                   marginLeft:5 } }, `(${desc})`)
               )
             )
           )
+        ),
+        React.createElement("div", { style:{ display:"flex", justifyContent:"flex-start", gap:10, flexWrap:"wrap", marginTop:14 } },
+          React.createElement("button", {
+            type:"button",
+            onClick: () => setShowAdvanced(v => !v),
+            style:{ ...BTN.ghost, background:"rgba(8,18,13,.78)", borderColor:"rgba(143,231,192,.16)" }
+          }, showAdvanced ? "HIDE ADVANCED" : "SHOW ADVANCED")
         )
       ),
-      React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:"1px solid #1e2230", borderRadius:10, padding:10 } },
+      showAdvanced && React.createElement(React.Fragment, null,
+      React.createElement("div", { style:{ marginBottom:18, ...createSurfaceStyle({ padding: 10, radius: 16 }) } },
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 } },
           React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:2 } }, "PLAYER POOL (80+ RATED)"),
           React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
@@ -378,7 +423,7 @@ export function SetupScreen({ user, onStart }) {
             })
         )
       ),
-      React.createElement("div", { style:{ marginBottom:18, background:"#0a0c12", border:"1px solid #1e2230", borderRadius:10, padding:10 } },
+      React.createElement("div", { style:{ marginBottom:18, ...createSurfaceStyle({ padding: 10, radius: 16 }) } },
         React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555", letterSpacing:2, marginBottom:8 } }, "TIER RULES"),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"40px 50px 50px 50px 50px 44px", gap:6, alignItems:"center", marginBottom:8, paddingBottom:8, borderBottom:"1px solid #1a1c22" } },
           React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#444", fontWeight:700 } }, "TIER"),
@@ -401,6 +446,7 @@ export function SetupScreen({ user, onStart }) {
             React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:12, color:t.color, textAlign:"right" } }, tierStats[key] || 0)
           )
         )
+      ),
       ),
       React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:8 } },
         names.map((n, i) =>
@@ -430,7 +476,7 @@ export function SetupScreen({ user, onStart }) {
           setPoolError("");
           const sessionId = `session:${Date.now()}`;
           // Only the auction *spec* is built here — which players/options to use. Lot
-          // assignment, draw order, pick order, and Mystery Card pools/candidates are all
+          // assignment, pick order, and Mystery Card pools/candidates are all
           // generated server-side so the host has exactly zero foresight, same as everyone else.
           const roomSpec = {
             id: sessionId,
@@ -458,6 +504,7 @@ export function SetupScreen({ user, onStart }) {
           }
         }
       }, creatingRoom ? "CREATING ROOM…" : (loadingPool ? "LOADING DATASET…" : selectedPlayers.length === 0 ? "NO PLAYERS SELECTED" : "CONTINUE →"))
+      ),
     )
   );
 }

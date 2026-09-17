@@ -1,6 +1,6 @@
 /**
  * Server-side port of every "secret" auction-generation step: lot assignment, Mystery Card
- * pools + initial candidates, draw order, pick sequence, and group/fixture assignment.
+ * pools + initial candidates, pick sequence, and group/fixture assignment.
  *
  * None of this may ever run in a client's browser (including the host's) — otherwise whoever's
  * browser computes it can simply read its own in-memory/outgoing-request values and get an
@@ -257,7 +257,7 @@ const MYSTERY_MIN_RATING = 87;
 
 /**
  * Given a host-supplied auction spec, generates every random/secret piece of the auction
- * server-side: lot assignment, draw order, pick sequence, Mystery Card pools + initial
+ * server-side: lot assignment, pick sequence, Mystery Card pools + initial
  * candidates, and group/fixture assignment. The host receives none of this back directly —
  * only the sanitized (empty-during-draw-phase) session view, same as every other participant.
  */
@@ -271,7 +271,7 @@ export function generateAuctionSetup({
   fixtureLeg,
 }) {
   const numLots = participantNames.length;
-  const lotOrder = shuffleArray(Array.from({ length: numLots }, (_, i) => i + 1));
+  const lotOrder = Array.from({ length: numLots }, (_, i) => i + 1);
   const lotAssignedPlayers = assignLotsToPlayers(selectedPlayers, tiers, numLots);
   const shuffledPlayers = shuffleArray(lotAssignedPlayers).sort((a, b) => a.lot - b.lot);
   const sequence = shuffleArray(participantNames);

@@ -2,6 +2,7 @@ import React from "react";
 import { Spinner } from "../components/Spinner.jsx";
 import { apiGetLeaderboard } from "../lib/api.js";
 import { BTN } from "../utils/styles.js";
+import { FOOTBALL_THEME, createSurfaceStyle, StatusPill } from "../theme/footballTheme.js";
 
 export function LeaderboardScreen({ user, onClose }) {
   const [leaderboard, setLeaderboard] = React.useState([]);
@@ -78,13 +79,14 @@ export function LeaderboardScreen({ user, onClose }) {
   };
 
   return React.createElement("div", {
-    style: { minHeight: "100vh", background: "#04060a", color: "#fff" }
+    style: { minHeight: "100vh", background: "transparent", color: "#fff" }
   },
     React.createElement("div", {
       style: {
         padding: "24px",
-        borderBottom: "1px solid #0f1218",
-        background: "#060810",
+        borderBottom: "1px solid rgba(255,255,255,.08)",
+        background: "rgba(8,12,19,.75)",
+        backdropFilter: "blur(12px)",
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center"
@@ -95,7 +97,7 @@ export function LeaderboardScreen({ user, onClose }) {
           style: {
             fontFamily: "'Bebas Neue'",
             fontSize: 28,
-            color: "#FFD700",
+            color: FOOTBALL_THEME.text,
             letterSpacing: 2
           }
         }, "🏆 LEADERBOARD"),
@@ -103,7 +105,7 @@ export function LeaderboardScreen({ user, onClose }) {
           style: {
             fontFamily: "'Rajdhani'",
             fontSize: 12,
-            color: "#888",
+            color: "#9aa5b5",
             marginTop: 4
           }
         }, "Premier League Style Standings")
@@ -130,7 +132,7 @@ export function LeaderboardScreen({ user, onClose }) {
             style: {
               textAlign: "center",
               padding: "60px 20px",
-              color: "#444",
+              color: "#667189",
               fontFamily: "'Rajdhani'",
               fontSize: 16
             }
@@ -140,10 +142,8 @@ export function LeaderboardScreen({ user, onClose }) {
             React.createElement("div", {
               style: {
                 marginBottom: 32,
-                padding: "16px",
-                background: "#0a0c12",
-                border: "1px solid #1e2230",
-                borderRadius: 8
+                ...createSurfaceStyle({ padding: 16, radius: 18, elevated: true }),
+                background: "rgba(8,12,19,.74)"
               }
             },
               React.createElement("div", {
@@ -158,16 +158,16 @@ export function LeaderboardScreen({ user, onClose }) {
                   style: {
                     fontFamily: "'Bebas Neue'",
                     fontSize: 16,
-                    color: "#FFD700"
+                    color: FOOTBALL_THEME.gold
                   }
                 }, "TOURNAMENT STANDINGS"),
                 React.createElement("button", {
                   onClick: openPositionModal,
                   style: {
                     padding: "8px 12px",
-                    background: "#FFD700",
+                    background: "linear-gradient(135deg,#4FC3F7,#00FF88)",
                     border: "none",
-                    color: "#000",
+                    color: "#041018",
                     borderRadius: 4,
                     fontFamily: "'Rajdhani'",
                     fontSize: 12,
@@ -176,10 +176,10 @@ export function LeaderboardScreen({ user, onClose }) {
                     transition: "all 0.2s"
                   },
                   onMouseOver: (e) => {
-                    e.target.style.background = "#FFF44F";
+                    e.target.style.background = "linear-gradient(135deg,#66d3ff,#29ff9b)";
                   },
                   onMouseLeave: (e) => {
-                    e.target.style.background = "#FFD700";
+                    e.target.style.background = "linear-gradient(135deg,#4FC3F7,#00FF88)";
                   }
                 }, "+ NEW TOURNAMENT")
               ),
@@ -188,7 +188,7 @@ export function LeaderboardScreen({ user, onClose }) {
                   style: {
                     fontFamily: "'Rajdhani'",
                     fontSize: 12,
-                    color: "#666"
+                    color: "#74839a"
                   }
                 }, "No tournaments created yet. Click 'NEW TOURNAMENT' to add one.")
                 : React.createElement("div", {
@@ -203,18 +203,18 @@ export function LeaderboardScreen({ user, onClose }) {
                       key: tournName,
                       style: {
                         padding: "8px 12px",
-                        background: "#1e2230",
-                        border: "1px solid #2a3340",
+                        background: "rgba(255,255,255,.05)",
+                        border: "1px solid rgba(255,255,255,.08)",
                         borderRadius: 4,
                         fontFamily: "'Rajdhani'",
                         fontSize: 11
                       }
                     },
                       React.createElement("div", {
-                        style: { color: "#FFD700", fontWeight: "bold" }
+                      style: { color: FOOTBALL_THEME.gold, fontWeight: "bold" }
                       }, tournName),
                       React.createElement("div", {
-                        style: { color: "#888", fontSize: 10 }
+                      style: { color: "#9aa5b5", fontSize: 10 }
                       }, `🥇 ${getFirstPlaceWinner(tournName)}`)
                     )
                   )
@@ -226,8 +226,8 @@ export function LeaderboardScreen({ user, onClose }) {
               style: {
                 overflowX: "auto",
                 borderRadius: 8,
-                border: "1px solid #1e2230",
-                background: "#0a0c12"
+                border: "1px solid rgba(255,255,255,.08)",
+                background: "rgba(8,12,19,.72)"
               }
             },
               React.createElement("table", {
@@ -240,8 +240,8 @@ export function LeaderboardScreen({ user, onClose }) {
                 React.createElement("thead", null,
                   React.createElement("tr", {
                     style: {
-                      background: "#0f1218",
-                      borderBottom: "2px solid #1e2230"
+                      background: "rgba(255,255,255,.04)",
+                      borderBottom: "2px solid rgba(255,255,255,.08)"
                     }
                   },
                     React.createElement("th", {

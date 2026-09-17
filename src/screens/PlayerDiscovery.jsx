@@ -2,15 +2,52 @@ import React from "react";
 import { BTN } from "../utils/styles.js";
 import { loadPlayersFromCsv } from "../data/players.js";
 import { PCOLORS, POS_GROUPS, getTierKey, getTierData, TIERS, getPosGroup } from "../game/constants.js";
-import { apiListResults, apiListSessions, apiSaveAuctionPoints } from "../lib/api.js";
+import { apiDeleteResult, apiListResults, apiListSessions, apiSaveAuctionPoints } from "../lib/api.js";
 import { Spinner } from "../components/Spinner.jsx";
 import { FifaPlayerCard } from "../components/FifaPlayerCard.jsx";
 import { PlayerDetailScreen } from "./PlayerDetailScreen.jsx";
-import { LeaderboardScreen } from "./LeaderboardScreen.jsx";
 import { LOTS } from "../game/constants.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
+import { TeamBadge, StatusPill, createSurfaceStyle, getParticipantAccent } from "../theme/footballTheme.js";
+import homeStartImg from "../assets/a560ead7123ef1ef98c30b6cae5ede6a.jpg";
+import homeLeagueImg from "../assets/dcb83d31a7726a149bb781e4d6c5db59.jpg";
+import homeResultsImg from "../assets/2ab993fda4bcc451e63958ef7236bd86.jpg";
 
-export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWishlist, onLogout, onRejoinLast, lastRoomCode, onLoadSession }) {
+function flattenLeagueFixtures(fixtures) {
+  return Object.entries(fixtures || {}).flatMap(([groupKey, groupFixtures]) => {
+    if (groupKey === "_knockout" || !Array.isArray(groupFixtures)) return [];
+    return groupFixtures;
+  });
+}
+
+function isPlayedFixture(fixture) {
+  return Number.isFinite(Number(fixture?.homeGoals)) && Number.isFinite(Number(fixture?.awayGoals));
+}
+
+function getLatestFixtureActivity(result) {
+  return flattenLeagueFixtures(result?.fixtures).reduce((latest, fixture) => (
+    Math.max(latest, Number(fixture?.scoreUpdatedAt) || 0)
+  ), 0);
+}
+
+function getOngoingLeagueSummary(result) {
+  const fixtures = flattenLeagueFixtures(result?.fixtures);
+  const totalFixtures = fixtures.length;
+  const playedFixtures = fixtures.filter(isPlayedFixture).length;
+  return {
+    fixtures,
+    totalFixtures,
+    playedFixtures,
+    isOngoing: totalFixtures > 0 && playedFixtures < totalFixtures,
+    latestActivityAt: Math.max(
+      getLatestFixtureActivity(result),
+      Number(result?.completedAt) || 0,
+      Number(result?.createdAt) || 0
+    ),
+  };
+}
+
+export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWishlist, onLogout, onRejoinLast, lastRoomCode, onLoadSession, onRestoreBackup }) {
   const [searchTerm, setSearchTerm] = React.useState("");
   const [selectedPos, setSelectedPos] = React.useState("ALL");
   const [selectedClub, setSelectedClub] = React.useState("ALL");
@@ -31,7 +68,10 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
   const [pointsModal, setPointsModal] = React.useState(null);
   const [participantPoints, setParticipantPoints] = React.useState({});
   const [savingPoints, setSavingPoints] = React.useState(false);
-  const [showLeaderboard, setShowLeaderboard] = React.useState(false);
+  const [deletingResultId, setDeletingResultId] = React.useState("");
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const [restoringBackup, setRestoringBackup] = React.useState(false);
+  const backupInputRef = React.useRef(null);
 
   // Load players from CSV on mount
   React.useEffect(() => {
@@ -71,6 +111,41 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
   const playerWishlist = wishlists[user.username] || [];
   const allClubs = Array.from(new Set(allPlayers.map(p => p.club)));
   const ratingRanges = ["ALL", "89+", "87-88", "84-86", "80-83"];
+  const isHomeView = activeTab === "browse";
+  const isOngoingView = activeTab === "ongoing" || activeTab === "leaderboard";
+  const pagePadding = { maxWidth: 1040, margin: "0 auto", padding: "20px 18px 34px" };
+  const ongoingLeagueResults = React.useMemo(() => (
+    [...pastResults]
+      .map((result) => ({ result, summary: getOngoingLeagueSummary(result) }))
+      .filter(({ summary }) => summary.isOngoing)
+      .sort((left, right) => right.summary.latestActivityAt - left.summary.latestActivityAt)
+  ), [pastResults]);
+  const latestOngoingLeague = ongoingLeagueResults[0] || null;
+  const homeCards = [
+    {
+      title: "START\nNEW\nAUCTION",
+      image: homeStartImg,
+      action: onNewGame,
+      width: 248,
+      height: 338,
+      overlay: "linear-gradient(180deg, rgba(0,0,0,.15) 0%, rgba(0,0,0,.42) 100%)",
+    },
+    {
+      title: "ONGOING\nLEAGUE\nSTAT",
+      image: homeLeagueImg,
+      action: () => setActiveTab("ongoing"),
+      width: 248,
+      height: 338,
+    },
+    {
+      title: "PAST\nRESULTS",
+      image: homeResultsImg,
+      action: () => setActiveTab("results"),
+      width: 248,
+      height: 338,
+      overlay: "linear-gradient(180deg, rgba(0,0,0,.1) 0%, rgba(0,0,0,.35) 100%)",
+    }
+  ];
 
   const filteredPlayers = allPlayers.filter(p => {
     const matchesSearch = !searchTerm || 
@@ -141,6 +216,29 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
     }
   };
 
+  const openBackupPicker = () => {
+    if (restoringBackup) return;
+    backupInputRef.current?.click();
+  };
+
+  const handleBackupSelected = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !onRestoreBackup) return;
+
+    setRestoringBackup(true);
+    try {
+      const raw = await file.text();
+      const backup = JSON.parse(raw);
+      await onRestoreBackup(backup);
+      setMenuOpen(false);
+    } catch (err) {
+      window.alert(`Failed to restore backup: ${err.message}`);
+    } finally {
+      setRestoringBackup(false);
+    }
+  };
+
   const handlePointsModalOpen = (sessionId, participants) => {
     const initialized = {};
     participants.forEach(p => {
@@ -185,6 +283,39 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
     }
   };
 
+  const handleDeleteResult = async (result) => {
+    const resultId = String(result?.sessionId || result?.id || "");
+    if (!resultId || deletingResultId) return;
+    if (!window.confirm(`Delete "${result?.name || "this past game"}"? This cannot be undone.`)) return;
+
+    setDeletingResultId(resultId);
+    try {
+      await apiDeleteResult(resultId, user?.token);
+      const [updatedSessions, updatedResults] = await Promise.all([
+        apiListSessions(user.username, user?.token),
+        apiListResults(user.username, user?.token),
+      ]);
+      setSessions(updatedSessions.filter((session) => session.status !== "complete"));
+      setPastResults(Array.isArray(updatedResults) ? updatedResults : []);
+      if (expandedResultId === resultId) setExpandedResultId("");
+    } catch (err) {
+      alert("Failed to delete game: " + err.message);
+    } finally {
+      setDeletingResultId("");
+    }
+  };
+
+  const openJoinModal = () => {
+    setMenuOpen(false);
+    setShowJoinModal(true);
+  };
+
+  const sectionBackButton = !isHomeView && React.createElement("button", {
+    type: "button",
+    onClick: () => { setActiveTab("browse"); setMenuOpen(false); },
+    style: { ...BTN.ghost, padding: "9px 16px", fontSize: 13 }
+  }, "← HOME");
+
   if (selectedPlayer) {
     return React.createElement(PlayerDetailScreen, {
       player: selectedPlayer,
@@ -194,64 +325,136 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
     });
   }
 
-  if (showLeaderboard) {
-    return React.createElement("div", { style:{ minHeight:"100vh", background:"#04060a", color:"#fff" } },
-      React.createElement("div", { style:{ maxWidth:800, margin:"0 auto", padding:"36px 20px" } },
-        React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:28 } },
+  if (isOngoingView) {
+    return React.createElement("div", { style:{ minHeight:"100vh", background:"transparent", color:"#fff" } },
+      React.createElement("div", { style: pagePadding },
+        React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18, gap:16, flexWrap:"wrap" } },
+          React.createElement("div", { style:{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" } },
+            sectionBackButton,
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#8ea0ba" } }, `@${user.username}`)
+          ),
+          React.createElement("button", { onClick:onLogout, style:BTN.ghost }, "SIGN OUT")
+        ),
+        React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24, gap:16, flexWrap:"wrap" } },
           React.createElement("div", null,
-            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:42, letterSpacing:3 } }, "MY AUCTIONS"),
-            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "Create new or resume a saved session")
+            React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:42, letterSpacing:3 } }, "ONGOING LEAGUE"),
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#8ea0ba" } }, "The latest league table where fixture scores are still incomplete")
           ),
           React.createElement("button", { onClick:onNewGame, style:BTN.gold }, "+ NEW AUCTION")
         ),
         loadingResults
           ? React.createElement("div", { style:{ display:"flex", justifyContent:"center", padding:60 } }, React.createElement(Spinner, null))
           : React.createElement(React.Fragment, null,
-              sessions.length === 0
-                ? React.createElement("div", { style:{ textAlign:"center", padding:"40px 0 20px", color:"#333",
-                    fontFamily:"'Rajdhani'", fontSize:16 } }, "No active auctions — create one above")
-                : React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10, marginBottom:28 } },
-                    sessions.map((s, i) =>
-                  React.createElement("div", { key:i, style:{
-                    background:"#0a0c12", border:"1px solid #1e2230", borderRadius:12,
-                    padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
-                    animation:`rowIn .25s ease ${i*.05}s both`
-                  }},
-                    React.createElement("div", null,
-                      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, s.name || `Auction #${i+1}`),
-                      React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
-                        `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${s.lotOrder?.length || LOTS} · `,
-                        React.createElement("span", { style:{ color: s.status==="complete" ? "#00FF88" : "#FFD700" } },
-                          s.status === "complete" ? "✓ Complete" : "In Progress"
+              latestOngoingLeague
+                ? React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10, marginBottom:28 } },
+                    React.createElement("div", { style:{
+                      ...createSurfaceStyle({ padding: 16, radius: 18, elevated: true }),
+                      background:"rgba(8,18,13,.86)",
+                      padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
+                      gap:16, flexWrap:"wrap"
+                    }},
+                      React.createElement("div", null,
+                        React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
+                          React.createElement(TeamBadge, { name: latestOngoingLeague.result.host || latestOngoingLeague.result.name || "League", color: getParticipantAccent(0), size: 24, subtle: true }),
+                          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#fff", letterSpacing:2 } }, latestOngoingLeague.result.name || "League Table")
+                        ),
+                        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#8ea0ba", marginTop:4, display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" } },
+                          `${latestOngoingLeague.summary.playedFixtures}/${latestOngoingLeague.summary.totalFixtures} matches scored · ${latestOngoingLeague.result.participants?.length || 0} teams`,
+                          React.createElement(StatusPill, { tone: "gold" }, "ONGOING")
                         )
+                      ),
+                      React.createElement("button", { onClick: () => onLoadSession(latestOngoingLeague.result), style:BTN.gold },
+                        "VIEW TABLE →"
                       )
-                    ),
-                    React.createElement("button", { onClick: () => onLoadSession(s), style:BTN.gold },
-                      "RESUME →"
                     )
                   )
-                )
-                )
+                : React.createElement("div", { style:{ textAlign:"center", padding:"40px 0 20px", color:"#8ea0ba",
+                    fontFamily:"'Rajdhani'", fontSize:16 } }, "No ongoing league table yet — once fixture scoring starts and remains incomplete, it will appear here.")
             )
-      ),
-      React.createElement("div", { style:{ padding:"14px 24px", borderBottom:"1px solid #0f1218",
-        display:"flex", justifyContent:"space-between", alignItems:"center", background:"#060810" } },
-        React.createElement("div", { style:{ display:"flex", gap:10, alignItems:"center" } },
-          React.createElement("button", { onClick: () => setShowLeaderboard(false), style:BTN.ghost }, "← BACK"),
-          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#FFD700", letterSpacing:2 } }, "THE AUCTION ROOM")
-        ),
-        React.createElement("div", { style:{ display:"flex", gap:10, alignItems:"center" } },
-          React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, `@${user.username}`),
-          React.createElement("button", { onClick:onLogout, style:BTN.ghost }, "SIGN OUT")
-        )
-      ),
-      React.createElement(LeaderboardScreen, { user, onClose: () => {} })
+      )
     );
   }
 
+  const renderHomeCard = (card, idx) => {
+    const cardStyle = {
+      width: card.width,
+      height: card.height,
+      position: "relative",
+      overflow: "hidden",
+      borderRadius: 2,
+      boxShadow: "0 30px 70px rgba(0,0,0,.35)",
+      cursor: "pointer",
+      background: "#0a0f18",
+      transition: "transform .2s ease, box-shadow .2s ease",
+      animation: `scaleIn .35s ease ${idx * .08}s both`,
+    };
+
+    return React.createElement("div", {
+      key: card.title,
+      role: "button",
+      tabIndex: 0,
+      onClick: card.action,
+      onKeyDown: (e) => (e.key === "Enter" || e.key === " ") && card.action?.(),
+      style: cardStyle,
+      onMouseEnter: (e) => {
+        e.currentTarget.style.transform = "translateY(-6px) scale(1.01)";
+        e.currentTarget.style.boxShadow = "0 40px 90px rgba(0,0,0,.45)";
+      },
+      onMouseLeave: (e) => {
+        e.currentTarget.style.transform = "translateY(0) scale(1)";
+        e.currentTarget.style.boxShadow = cardStyle.boxShadow;
+      }
+    },
+      React.createElement(React.Fragment, null,
+        React.createElement("div", {
+          style: {
+            position: "absolute",
+            inset: 0,
+            backgroundImage: `url(${card.image})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            filter: "saturate(1.05) contrast(1.05)"
+          }
+        }),
+        React.createElement("div", {
+          style: {
+            position: "absolute",
+            inset: 0,
+            background: card.overlay || "linear-gradient(180deg, rgba(0,0,0,.12), rgba(0,0,0,.5))"
+          }
+        }),
+        React.createElement("div", {
+          style: {
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            textAlign: "center",
+            color: "#fff",
+            fontFamily: "'Bebas Neue'",
+            fontSize: 36,
+            lineHeight: 0.9,
+            letterSpacing: 1,
+            textShadow: "0 4px 14px rgba(0,0,0,.9)",
+            whiteSpace: "pre-line",
+            padding: 18,
+          }
+        }, card.title)
+      )
+    );
+  };
+
   return React.createElement("div", {
-    style:{ minHeight:"100vh", background:"#04060a", color:"#fff" }
+    style:{ minHeight:"100vh", background:"transparent", color:"#fff" }
   },
+    React.createElement("input", {
+      ref: backupInputRef,
+      type: "file",
+      accept: "application/json,.json",
+      onChange: handleBackupSelected,
+      style: { display: "none" },
+    }),
     pointsModal && React.createElement("div", {
       style: {
         position: "fixed",
@@ -279,9 +482,10 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
         React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 } },
           (pointsModal.participants || []).map(participant =>
             React.createElement("div", { key: participant.name, style: { display: "flex", alignItems: "center", gap: 12 } },
-              React.createElement("div", { style: { flex: 1 } },
-                React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 14, color: "#fff" } }, participant.name),
-                React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: "#666" } }, `Squad: ${participant.squad?.length || 0}`)
+            React.createElement(TeamBadge, { name: participant.name, color: getParticipantAccent((pointsModal.participants || []).findIndex((p) => p.name === participant.name)), size: 26, subtle: true }),
+            React.createElement("div", { style: { flex: 1 } },
+              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 14, color: "#fff" } }, participant.name),
+              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: "#666" } }, `Squad: ${participant.squad?.length || 0}`)
               ),
               React.createElement("input", {
                 type: "number",
@@ -321,22 +525,65 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       )
     ),
 
-    React.createElement("div", { style:{ padding:"14px 24px", borderBottom:"1px solid #0f1218",
-      display:"flex", justifyContent:"space-between", alignItems:"center", background:"#060810" } },
-      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#FFD700", letterSpacing:2 } }, "THE AUCTION ROOM"),
+    React.createElement("div", { style:{ padding:"16px 18px 0",
+    display:"flex", justifyContent:"space-between", alignItems:"center", background:"transparent", position:"relative", zIndex:5, gap:12 } },
+    sectionBackButton || React.createElement("div", { style:{ width:1, height:1 } }),
       React.createElement("div", { style:{ display:"flex", gap:10, alignItems:"center" } },
-        React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, `@${user.username}`),
-        React.createElement("button", { onClick:onLogout, style:BTN.ghost }, "SIGN OUT"),
-        React.createElement("button", { onClick:onNewGame, style:BTN.gold }, "+ CREATE GAME"),
-        lastRoomCode && React.createElement("button", {
-          onClick: handleRejoinClick,
-          disabled: joinLoading,
-          style:{ ...BTN.ghost, borderColor:"#00FF8844", color:"#00FF88", opacity: joinLoading ? .6 : 1 }
-        }, joinLoading ? "REJOINING…" : `REJOIN ${lastRoomCode}`),
         React.createElement("button", {
-          onClick: () => setShowJoinModal(true),
-          style:{ ...BTN.ghost, marginLeft:8 }
-        }, "JOIN BY CODE")
+          type:"button",
+          onClick: () => setMenuOpen((prev) => !prev),
+          style:{ ...BTN.ghost, padding:"8px 14px", fontSize:16, lineHeight:1, minWidth:48 }
+        }, "☰")
+      ),
+      menuOpen && React.createElement("div", {
+        style:{
+          position:"absolute",
+          top:"calc(100% + 10px)",
+          right:18,
+          width:260,
+          zIndex:20,
+          ...createSurfaceStyle({ padding: 10, radius: 18, elevated: true }),
+          background:"rgba(8,18,13,.96)"
+        }
+      },
+        React.createElement("div", {
+          style:{ padding:"6px 10px 12px", borderBottom:"1px solid rgba(255,255,255,.08)", marginBottom:8 }
+        },
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:"#e8f7ef", letterSpacing:2 } }, "THE AUCTION ROOM"),
+          React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#8ea0ba", marginTop:4 } }, `@${user.username}`)
+        ),
+        [
+          { label: "+ CREATE GAME", action: () => { setMenuOpen(false); onNewGame(); }, tone: "primary" },
+          { label: "JOIN BY CODE", action: openJoinModal },
+          lastRoomCode ? { label: joinLoading ? "REJOINING…" : `REJOIN ${lastRoomCode}`, action: handleRejoinClick, disabled: joinLoading } : null,
+          onRestoreBackup ? { label: restoringBackup ? "RESTORING BACKUP…" : "RESTORE BACKUP", action: openBackupPicker, disabled: restoringBackup } : null,
+          { label: "ONGOING AUCTIONS", action: () => { setMenuOpen(false); setActiveTab("ongoing"); } },
+          { label: "MY WISHLIST", action: () => { setMenuOpen(false); setActiveTab("wishlist"); } },
+          { label: "PLAYERS", action: () => { setMenuOpen(false); setActiveTab("players"); } },
+          { label: "PAST RESULTS", action: () => { setMenuOpen(false); setActiveTab("results"); } },
+          { label: "SIGN OUT", action: () => { setMenuOpen(false); onLogout(); }, tone: "danger" },
+        ].filter(Boolean).map((item) => React.createElement("button", {
+              key: item.label,
+              type:"button",
+              onClick: item.action,
+              disabled: item.disabled,
+              style:{
+                width:"100%",
+                textAlign:"left",
+                marginBottom:6,
+                background: item.tone === "primary" ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : item.tone === "danger" ? "#FF3D7118" : "rgba(255,255,255,.03)",
+                color: item.tone === "primary" ? "#051018" : item.tone === "danger" ? "#ff8aa9" : "#e8f7ef",
+                border:`1px solid ${item.tone === "primary" ? "rgba(79,195,247,.35)" : item.tone === "danger" ? "#FF3D7144" : "rgba(255,255,255,.08)"}`,
+                borderRadius:12,
+                padding:"10px 12px",
+                cursor: item.disabled ? "default" : "pointer",
+                opacity: item.disabled ? 0.6 : 1,
+                fontFamily:"'Bebas Neue'",
+                fontSize:14,
+                letterSpacing:1,
+              }
+            }, item.label)
+        )
       )
     ),
 
@@ -371,23 +618,28 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       )
     ),
 
-    React.createElement("div", { style:{ borderBottom:"1px solid #0f1218", background:"#060810", display:"flex", padding:"0 24px" } },
-      ["browse","wishlist","results","leaderboard"].map(tab =>
-        React.createElement("button", { key:tab, onClick:() => setActiveTab(tab), style:{
-          background:"transparent", border:"none",
-          borderBottom: activeTab===tab ? "2px solid #FFD700" : "2px solid transparent",
-          color: activeTab===tab ? "#FFD700" : "#555",
-          padding:"10px 20px", cursor:"pointer",
-          fontFamily:"'Bebas Neue'", fontSize:13, letterSpacing:2,
-          marginBottom:-1, transition:"all .2s"
-        }}, tab==="browse" ? "BROWSE PLAYERS" : tab==="wishlist" ? "❤️ MY WISHLIST" : tab==="results" ? "🗒️ PAST RESULTS" : "🏆 LEADERBOARD")
-      )
+    activeTab === "browse" && React.createElement("div", { style:{ maxWidth:1050, margin:"0 auto", padding:"28px 18px 24px" } },
+      React.createElement("div", {
+        style:{
+          display:"flex",
+          justifyContent:"center",
+          gap:42,
+          alignItems:"flex-start",
+          flexWrap:"wrap",
+          paddingTop: 12
+        }
+      }, homeCards.map(renderHomeCard)),
+      null
     ),
 
-    activeTab === "browse" && React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"24px" } },
+    activeTab === "players" && React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"18px" } },
       React.createElement("div", { style:{ marginBottom:24 } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:32, letterSpacing:3, marginBottom:4 } }, "BROWSE PLAYERS"),
-        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, `Wishlist and discover players for your next auction`)
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:32, letterSpacing:3, marginBottom:4 } }, "MY WISHLIST"),
+        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } },
+          playerWishlist.length > 0
+            ? `${playerWishlist.length} player${playerWishlist.length!==1?"s":""} wishlisted`
+            : "Browse players and click ❤️ to wishlist them"
+        )
       ),
 
       React.createElement("div", { style:{ display:"flex", gap:10, marginBottom:20, flexWrap:"wrap" } },
@@ -497,7 +749,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       )
     ),
 
-    activeTab === "wishlist" && React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"24px" } },
+    activeTab === "wishlist" && React.createElement("div", { style:{ maxWidth:1200, margin:"0 auto", padding:"18px" } },
       React.createElement("div", { style:{ marginBottom:24 } },
         React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:32, letterSpacing:3, marginBottom:4 } }, "MY WISHLIST"),
         React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } },
@@ -551,11 +803,11 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       })()
     ),
 
-    activeTab === "results" && React.createElement("div", { style:{ maxWidth:800, margin:"0 auto", padding:"36px 20px" } },
+    activeTab === "results" && React.createElement("div", { style:{ maxWidth:860, margin:"0 auto", padding:"18px 18px 34px" } },
       React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:28 } },
         React.createElement("div", null,
-          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:42, letterSpacing:3 } }, "MY AUCTIONS"),
-          React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "Create new or resume a saved session")
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:42, letterSpacing:3 } }, "PAST RESULTS"),
+          React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#8ea0ba" } }, "Open completed auctions, award points, or delete old seasons")
         ),
         React.createElement("button", { onClick:onNewGame, style:BTN.gold }, "+ NEW AUCTION")
       ),
@@ -567,7 +819,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
                   fontFamily:"'Rajdhani'", fontSize:16 } }, "No active auctions — create one above")
               : React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10, marginBottom:28 } },
                   sessions.map((s, i) =>
-                React.createElement("div", { key:i, style:{
+                React.createElement("div", { key:s.id || s.roomCode || i, style:{
                   background:"#0a0c12", border:"1px solid #1e2230", borderRadius:12,
                   padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
                   animation:`rowIn .25s ease ${i*.05}s both`
@@ -593,7 +845,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
               ),
               React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
                 pastResults.map((result, i) =>
-                  React.createElement("div", { key:`result-${i}`, style:{
+                  React.createElement("div", { key:`result-${String(result.sessionId || result.id || i)}`, style:{
                     background:"#0a0c12", border:"1px solid #1e2230", borderRadius:12,
                     padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
                     animation:`rowIn .25s ease ${i*.05}s both`
@@ -607,19 +859,24 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
                             React.createElement("span", { style:{ color:"#00FF88" } }, "✓ Complete")
                           )
                         ),
-                        React.createElement("div", { style:{ display:"flex", gap:8 } },
+                        React.createElement("div", { style:{ display:"flex", gap:8, flexWrap:"wrap", justifyContent:"flex-end" } },
+                          result.host === user.username && React.createElement("button", {
+                            onClick: () => handleDeleteResult(result),
+                            disabled: deletingResultId === String(result.sessionId || result.id || ""),
+                            style: { ...BTN.ghost, borderColor: "#FF6B3544", color: "#FF6B35", opacity: deletingResultId === String(result.sessionId || result.id || "") ? 0.6 : 1 }
+                          }, deletingResultId === String(result.sessionId || result.id || "") ? "DELETING…" : "🗑 DELETE"),
                           React.createElement("button", {
-                            onClick: () => handlePointsModalOpen(result.sessionId, result.participants || []),
+                            onClick: () => handlePointsModalOpen(String(result.sessionId || result.id || ""), result.participants || []),
                             style: { ...BTN.ghost, borderColor: "#FFD70044", color: "#FFD700" }
                           }, "📊 POINTS"),
                           React.createElement("button", {
-                            onClick: () => setExpandedResultId(expandedResultId === result.sessionId ? "" : result.sessionId),
+                            onClick: () => setExpandedResultId(expandedResultId === String(result.sessionId || result.id || "") ? "" : String(result.sessionId || result.id || "")),
                             style: BTN.ghost
-                          }, expandedResultId === result.sessionId ? "HIDE SQUADS" : "VIEW SQUADS"),
+                          }, expandedResultId === String(result.sessionId || result.id || "") ? "HIDE SQUADS" : "VIEW SQUADS"),
                           React.createElement("button", { onClick: () => onLoadSession(result), style:BTN.gold }, "VIEW RESULTS")
                         )
                       ),
-                      expandedResultId === result.sessionId && React.createElement("div", {
+                      expandedResultId === String(result.sessionId || result.id || "") && React.createElement("div", {
                         style:{ marginTop:12, borderTop:"1px solid #1e2230", paddingTop:10, display:"flex", flexDirection:"column", gap:8 }
                       },
                         (result.participants || []).length === 0
@@ -663,10 +920,6 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
           )
     ),
 
-    activeTab === "leaderboard" && React.createElement(LeaderboardScreen, {
-      user,
-      onClose: () => {}
-    })
   );
 
   function handleWishlist(playerId) {
