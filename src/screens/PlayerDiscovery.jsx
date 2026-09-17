@@ -673,7 +673,7 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
       )
     ),
 
-    activeTab === "browse" && React.createElement("div", { style:{ maxWidth:1050, margin:"0 auto", padding:"28px 18px 24px" } },
+    activeTab === "browse" && React.createElement("div", { style:{ maxWidth:1050, margin:"0 auto", padding:"28px 18px 24px", minHeight:"calc(100vh - 140px)", display:"flex", flexDirection:"column", justifyContent:"center" } },
       React.createElement("div", {
         style:{
           display:"flex",
@@ -681,7 +681,8 @@ export function PlayerDiscovery({ user, wishlists, onNewGame, onJoinByCode, onWi
           gap:42,
           alignItems:"flex-start",
           flexWrap:"wrap",
-          paddingTop: 12
+          paddingTop: 12,
+          width: "100%",
         }
       }, homeCards.map(renderHomeCard)),
       null
