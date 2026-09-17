@@ -103,6 +103,14 @@ function isPlayedFixture(fixture) {
   return Number.isFinite(Number(fixture?.homeGoals)) && Number.isFinite(Number(fixture?.awayGoals));
 }
 
+function getTransferSalePrice(player, tiers = {}) {
+  const explicitPrice = Number(player?.salePrice ?? player?.purchasePrice);
+  if (Number.isFinite(explicitPrice)) return explicitPrice;
+  const rating = Number(player?.rating);
+  const fallbackTier = Object.values(tiers || {}).find((tier) => rating >= Number(tier?.min) && rating <= Number(tier?.max));
+  return Number(fallbackTier?.price || 0);
+}
+
 function isFirstRoundComplete(result) {
   if (!result?.groupsEnabled) return false;
   const groups = result.groups || {};
@@ -172,15 +180,23 @@ function createTransferSessionFromResult(result) {
     carriedBudgets: Object.fromEntries(
       (Array.isArray(result.participants) ? result.participants : []).map((participant) => [
         participant.name,
-        Number(participant?.budget || 0),
+        Number(result?.carriedBudgets?.[participant.name] ?? participant?.budget ?? 0),
       ])
     ),
-    soldPlayerIds: [],
+    soldPlayerIds: (Array.isArray(result.participants) ? result.participants : [])
+      .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
+      .map((player) => Number(player?.id))
+      .filter(Number.isFinite),
     transferWindow: {
       phase: "selling",
       requiredSalesMin: 2,
       requiredSalesMax: 5,
-      completedBy: [],
+      completedBy: (Array.isArray(result.participants) ? result.participants : [])
+        .filter((participant) => {
+          const listed = Array.isArray(participant?.soldPlayers) ? participant.soldPlayers.length : 0;
+          return listed >= 2 && listed <= 5;
+        })
+        .map((participant) => participant.name),
       openedAt: now,
       closedAt: null,
       sourceResultId: String(result.sessionId || result.id || ""),
@@ -406,6 +422,131 @@ router.post("/results/:auctionResultId/ballon-dor-submissions", requireUserAuth,
     return res.status(201).json({ submission: { id: submissionId, ...payload } });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to save Ballon dOr submission", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
+router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async (req, res) => {
+  try {
+    const { auctionResultId } = req.params;
+    const username = String(req.user?.username || "").trim();
+    const playerId = Number(req.body?.playerId);
+    const listed = Boolean(req.body?.listed);
+    if (!auctionResultId || !Number.isFinite(playerId)) {
+      return res.status(400).json({ error: "auctionResultId and playerId are required" });
+    }
+
+    const { db } = getFirebase();
+    const resultRef = db.collection("auctionResults").doc(auctionResultId);
+    const resultSnap = await resultRef.get();
+    if (!resultSnap.exists) return res.status(404).json({ error: "Result not found" });
+    const result = normalizeAuctionResultDocument(resultSnap.data());
+    if (!canAccessResult(result, username)) {
+      return res.status(403).json({ error: "You are not allowed to update transfer listings for this league" });
+    }
+    if (String(result.transferWindow?.activeSessionId || "")) {
+      return res.status(409).json({ error: "Transfer window is already active. Update listings from the live transfer session." });
+    }
+
+    const participants = Array.isArray(result.participants) ? result.participants : [];
+    const ownerParticipant = participants.find((participant) => participant.name === username);
+    if (!ownerParticipant) {
+      return res.status(403).json({ error: "Only team owners can manage their transfer listings" });
+    }
+
+    const squad = Array.isArray(ownerParticipant.squad) ? ownerParticipant.squad : [];
+    const soldPlayers = Array.isArray(ownerParticipant.soldPlayers) ? ownerParticipant.soldPlayers : [];
+    const existingSoldPlayer = soldPlayers.find((player) => Number(player?.id) === playerId);
+    const existingSquadPlayer = squad.find((player) => Number(player?.id) === playerId);
+
+    if (listed && !existingSquadPlayer) {
+      return res.status(404).json({ error: "Player not found in your squad" });
+    }
+    if (!listed && !existingSoldPlayer) {
+      return res.status(404).json({ error: "Player is not currently listed for transfer" });
+    }
+
+    const requiredSalesMin = Number(result.transferWindow?.requiredSalesMin || 2);
+    const requiredSalesMax = Number(result.transferWindow?.requiredSalesMax || 5);
+    if (listed && soldPlayers.length >= requiredSalesMax) {
+      return res.status(409).json({ error: `You can list at most ${requiredSalesMax} players` });
+    }
+
+    const listingPrice = getTransferSalePrice(existingSquadPlayer || existingSoldPlayer, result.tiers);
+    const now = Date.now();
+    const nextParticipants = participants.map((participant) => {
+      if (participant.name !== username) return participant;
+      const participantBudget = Number(participant?.budget || 0);
+      const participantSquad = Array.isArray(participant.squad) ? participant.squad : [];
+      const participantSoldPlayers = Array.isArray(participant.soldPlayers) ? participant.soldPlayers : [];
+      if (listed) {
+        return {
+          ...participant,
+          budget: participantBudget + listingPrice,
+          squad: participantSquad.filter((player) => Number(player?.id) !== playerId),
+          soldPlayers: [
+            ...participantSoldPlayers,
+            {
+              ...existingSquadPlayer,
+              soldAt: now,
+              salePrice: listingPrice,
+              soldInTransferWindow: true,
+            },
+          ],
+        };
+      }
+
+      return {
+        ...participant,
+        budget: Math.max(0, participantBudget - listingPrice),
+        squad: [...participantSquad, { ...existingSoldPlayer, soldAt: undefined, salePrice: undefined, soldInTransferWindow: false }],
+        soldPlayers: participantSoldPlayers.filter((player) => Number(player?.id) !== playerId),
+      };
+    });
+
+    const nextCompletedBy = nextParticipants
+      .filter((participant) => {
+        const listedCount = Array.isArray(participant?.soldPlayers) ? participant.soldPlayers.length : 0;
+        return listedCount >= requiredSalesMin && listedCount <= requiredSalesMax;
+      })
+      .map((participant) => participant.name);
+    const nextCarriedBudgets = {
+      ...(result.carriedBudgets || {}),
+      [username]: Number.isFinite(Number((result.carriedBudgets || {})[username]))
+        ? Number((result.carriedBudgets || {})[username])
+        : Number(ownerParticipant?.budget || 0),
+    };
+    const nextSoldPlayerIds = nextParticipants
+      .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
+      .map((player) => Number(player?.id))
+      .filter(Number.isFinite);
+    const nextTransferWindow = {
+      ...(result.transferWindow || {}),
+      requiredSalesMin,
+      requiredSalesMax,
+      completedBy: nextCompletedBy,
+      phase: String(result.transferWindow?.phase || "locked"),
+    };
+    const nextResult = {
+      ...result,
+      participants: nextParticipants,
+      carriedBudgets: nextCarriedBudgets,
+      soldPlayerIds: nextSoldPlayerIds,
+      transferWindow: nextTransferWindow,
+      updatedAt: now,
+    };
+
+    await resultRef.set({
+      participants: nextParticipants,
+      carriedBudgets: nextCarriedBudgets,
+      soldPlayerIds: nextSoldPlayerIds,
+      transferWindow: nextTransferWindow,
+      updatedAt: now,
+    }, { merge: true });
+
+    return res.json({ result: nextResult });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to update transfer listings", 500);
     return res.status(normalized.status).json({ error: normalized.error });
   }
 });

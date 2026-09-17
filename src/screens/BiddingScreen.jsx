@@ -730,7 +730,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       ]));
       const nextCarriedBudgets = {
         ...carriedBudgets,
-        [myParticipant.name]: Number(myParticipant.budget || 0),
+        [myParticipant.name]: Number.isFinite(Number(carriedBudgets?.[myParticipant.name]))
+          ? Number(carriedBudgets[myParticipant.name])
+          : Number(myParticipant.budget || 0),
       };
 
       setParticipants(nextParticipants);

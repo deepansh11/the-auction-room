@@ -233,6 +233,15 @@ export async function apiGetBallonDorSubmissions(auctionResultId, token) {
   return Array.isArray(data?.submissions) ? data.submissions : [];
 }
 
+export async function apiUpdateResultTransferListing(auctionResultId, playerId, listed, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/transfer-listings`, {
+    method: "PUT",
+    body: { playerId, listed },
+    token,
+  });
+  return normalizeResultRecord(data?.result);
+}
+
 export async function apiCreateBallonDorUploadLink(auctionResultId, token) {
   return request(`/api/results/${encodeURIComponent(auctionResultId)}/ballon-dor-upload-link`, {
     method: "POST",

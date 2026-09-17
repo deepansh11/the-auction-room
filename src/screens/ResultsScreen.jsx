@@ -3,7 +3,7 @@ import { BallonDorPanel } from "../components/BallonDorPanel.jsx";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
 import { computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
-import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateSession } from "../lib/api.js";
+import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateSession } from "../lib/api.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
 import { trackEvent } from "../lib/analytics.js";
 
@@ -766,6 +766,11 @@ export function ResultsScreen({
   const [knockoutPublished, setKnockoutPublished] = React.useState(false);
   const [loadingLatest, setLoadingLatest] = React.useState(false);
   const [startingTransferWindow, setStartingTransferWindow] = React.useState(false);
+  const [resultTransferState, setResultTransferState] = React.useState({
+    participants,
+    carriedBudgets: {},
+    transferWindow,
+  });
   const [transferSessionState, setTransferSessionState] = React.useState(null);
   const [transferSyncLoading, setTransferSyncLoading] = React.useState(false);
   const [transferActionPlayerId, setTransferActionPlayerId] = React.useState("");
@@ -779,6 +784,14 @@ export function ResultsScreen({
     setFixturesState(groupFixtures);
     setKnockoutScores((prev) => Object.keys(prev).length > 0 ? prev : (_knockout || {}));
   }, [fixtures]);
+
+  React.useEffect(() => {
+    setResultTransferState({
+      participants,
+      carriedBudgets: {},
+      transferWindow,
+    });
+  }, [participants, transferWindow]);
 
   const participantMeta = React.useMemo(() => new Map(
     (participants || []).map((participant, index) => [
@@ -933,10 +946,12 @@ export function ResultsScreen({
     loadTransferSession();
   }, [loadTransferSession]);
 
-  const effectiveTransferWindow = transferSessionState?.transferWindow || transferWindow || {};
+  const effectiveTransferWindow = transferSessionState?.transferWindow || resultTransferState.transferWindow || transferWindow || {};
   const inventoryParticipants = React.useMemo(
-    () => (Array.isArray(transferSessionState?.participants) && transferSessionState.participants.length > 0 ? transferSessionState.participants : participants),
-    [participants, transferSessionState?.participants]
+    () => (Array.isArray(transferSessionState?.participants) && transferSessionState.participants.length > 0
+      ? transferSessionState.participants
+      : (Array.isArray(resultTransferState.participants) && resultTransferState.participants.length > 0 ? resultTransferState.participants : participants)),
+    [participants, resultTransferState.participants, transferSessionState?.participants]
   );
   const purchasedPlayers = React.useMemo(() => inventoryParticipants.flatMap((participant) => {
     const ownerIdx = participants.findIndex((entry) => entry.name === participant.name);
@@ -999,7 +1014,13 @@ export function ResultsScreen({
     () => inventoryParticipants.find((participant) => participant.name === selectedName) || null,
     [inventoryParticipants, selectedName]
   );
-  const transferListingEditable = Boolean(transferSessionId && transferSessionState && effectiveTransferWindow.phase === "selling");
+  const transferListingEditable = Boolean(
+    user?.token
+    && (
+      (transferSessionId && transferSessionState && effectiveTransferWindow.phase === "selling")
+      || !transferSessionId
+    )
+  );
 
   const handleFixtureGoalChange = (groupLabel, fixtureId, side, rawValue) => {
     const value = rawValue === "" ? null : Math.max(0, parseInt(rawValue, 10) || 0);
@@ -1072,8 +1093,10 @@ export function ResultsScreen({
   };
 
   const handleToggleTransferListing = async (player) => {
-    if (!transferListingEditable || !transferSessionState?.id || !user?.token || !player?.owner || player.owner !== selectedName) return;
-    const activeParticipants = Array.isArray(transferSessionState.participants) ? transferSessionState.participants : [];
+    if (!transferListingEditable || !user?.token || !player?.owner || player.owner !== selectedName) return;
+    const activeParticipants = Array.isArray(transferSessionState?.participants) && transferSessionState.participants.length > 0
+      ? transferSessionState.participants
+      : inventoryParticipants;
     const ownerParticipant = activeParticipants.find((participant) => participant.name === player.owner);
     if (!ownerParticipant) return;
 
@@ -1124,35 +1147,43 @@ export function ResultsScreen({
         };
       });
 
-      const nextCompletedBy = Array.from(new Set(nextParticipants
-        .filter((participant) => {
-          const count = (participant.soldPlayers || []).length;
-          return count >= requiredSalesMin && count <= requiredSalesMax;
-        })
-        .map((participant) => participant.name)));
-      const nextSoldPlayerIds = nextParticipants
-        .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
-        .map((entry) => Number(entry?.id))
-        .filter(Number.isFinite);
-      const nextCarriedBudgets = {
-        ...(transferSessionState.carriedBudgets || {}),
-        [player.owner]: Number.isFinite(Number((transferSessionState.carriedBudgets || {})[player.owner]))
-          ? Number((transferSessionState.carriedBudgets || {})[player.owner])
-          : Number(ownerParticipant.budget || 0),
-      };
-      const nextSession = {
-        ...transferSessionState,
-        participants: nextParticipants,
-        soldPlayerIds: nextSoldPlayerIds,
-        carriedBudgets: nextCarriedBudgets,
-        transferWindow: {
-          ...effectiveTransferWindow,
-          completedBy: nextCompletedBy,
-        },
-      };
-
-      await apiUpdateSession(transferSessionState.id, nextSession, user.token);
-      setTransferSessionState(nextSession);
+      if (transferSessionState?.id) {
+        const nextCompletedBy = Array.from(new Set(nextParticipants
+          .filter((participant) => {
+            const count = (participant.soldPlayers || []).length;
+            return count >= requiredSalesMin && count <= requiredSalesMax;
+          })
+          .map((participant) => participant.name)));
+        const nextSoldPlayerIds = nextParticipants
+          .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
+          .map((entry) => Number(entry?.id))
+          .filter(Number.isFinite);
+        const nextCarriedBudgets = {
+          ...(transferSessionState.carriedBudgets || {}),
+          [player.owner]: Number.isFinite(Number((transferSessionState.carriedBudgets || {})[player.owner]))
+            ? Number((transferSessionState.carriedBudgets || {})[player.owner])
+            : Number(ownerParticipant.budget || 0),
+        };
+        const nextSession = {
+          ...transferSessionState,
+          participants: nextParticipants,
+          soldPlayerIds: nextSoldPlayerIds,
+          carriedBudgets: nextCarriedBudgets,
+          transferWindow: {
+            ...effectiveTransferWindow,
+            completedBy: nextCompletedBy,
+          },
+        };
+        await apiUpdateSession(transferSessionState.id, nextSession, user.token);
+        setTransferSessionState(nextSession);
+      } else {
+        const nextResult = await apiUpdateResultTransferListing(auctionResultId, player.id, !currentlyListed, user.token);
+        setResultTransferState({
+          participants: nextResult?.participants || participants,
+          carriedBudgets: nextResult?.carriedBudgets || {},
+          transferWindow: nextResult?.transferWindow || transferWindow,
+        });
+      }
       setTransferActionMessage(currentlyListed ? "Player removed from transfer listings." : "Player added to transfer listings.");
     } catch (err) {
       setTransferActionMessage(err.message || "Could not update the transfer listings.");
@@ -1687,12 +1718,35 @@ export function ResultsScreen({
             React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: transferListingEditable ? "#8fe7c0" : "#7f8ea6", maxWidth: 420, textAlign: "right" } },
               transferSyncLoading
                 ? "Syncing transfer window…"
-                : transferListingEditable
-                  ? `Transfer window is live. List ${effectiveTransferWindow.requiredSalesMin || 2}-${effectiveTransferWindow.requiredSalesMax || 5} players from your own squad.`
+                : !transferSessionId
+                  ? `Pre-list players now. When the transfer window opens, these listings will already be synced.`
+                  : transferListingEditable
+                    ? `Transfer window is live. List ${effectiveTransferWindow.requiredSalesMin || 2}-${effectiveTransferWindow.requiredSalesMax || 5} players from your own squad.`
                   : transferWindowAlreadyOpened
                     ? "Transfer listings are read-only here because the market is already open or closed."
-                    : "Open the mid-season transfer window to start listing players here."
+                    : "Transfer listings are available here."
             )
+          ),
+          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10 } },
+            [
+              { key: "purchased", label: "PURCHASED IN AUCTION", count: filteredPurchasedPlayers.length, tone: "#FFD700" },
+              { key: "unpurchased", label: "UNPURCHASED POOL", count: filteredUnpurchasedPlayers.length, tone: "#4FC3F7" },
+              { key: "listed", label: "PUT UP FOR TRANSFER", count: filteredTransferListedPlayers.length, tone: "#FFB84D" },
+            ].map((item) => React.createElement("div", {
+              key: item.key,
+              style: {
+                background: `${item.tone}10`,
+                border: `1px solid ${item.tone}33`,
+                borderRadius: 14,
+                padding: "12px 14px",
+                display: "grid",
+                gap: 4,
+              }
+            },
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 10, fontWeight: 700, color: item.tone, letterSpacing: 1.5 } }, item.label),
+            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 28, color: "#fff", letterSpacing: 1 } }, item.count),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba" } }, "Visible with current filters")
+            ))
           ),
           transferActionMessage && React.createElement("div", {
             style: {
@@ -1740,7 +1794,7 @@ export function ResultsScreen({
             key: section.key,
             style: {
               background: "#0a0f17",
-              border: "1px solid #1f2937",
+              border: `1px solid ${section.key === "listed" ? "#FFB84D33" : section.key === "unpurchased" ? "#4FC3F733" : "#FFD70033"}`,
               borderRadius: 18,
               padding: 16,
               display: "grid",
@@ -1756,7 +1810,7 @@ export function ResultsScreen({
           ),
           section.rows.length === 0
             ? React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, section.empty)
-            : React.createElement("div", { style: { display: "grid", gap: 10 } }, section.rows.map((player, index) => renderInventoryRow(player, index, {
+            : React.createElement("div", { style: { display: "grid", gap: 10, maxHeight: 360, overflowY: "auto", paddingRight: 4 } }, section.rows.map((player, index) => renderInventoryRow(player, index, {
                 showOwner: section.showOwner,
                 showAction: section.showAction,
                 showTransferPrice: section.showTransferPrice,
