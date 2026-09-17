@@ -7,7 +7,7 @@ import {
   apiSaveBallonDorSubmission,
   apiSavePublicBallonDorSubmission,
 } from "../lib/api.js";
-import { buildBallonDorRanking, extractFeaturedPlayerCard, parsePerformanceCaptureText, validatePerformanceCaptureDraft } from "../utils/performanceCapture.js";
+import { buildBallonDorRanking, extractFeaturedPlayerCard, mergePerformanceCaptureWithRoster, normalizePlayerKey, parsePerformanceCaptureText, validatePerformanceCaptureDraft } from "../utils/performanceCapture.js";
 import { generateBallonDorUploadLink } from "../utils/roomUtils.js";
 
 function emptyPlayerRow(index) {
@@ -113,6 +113,10 @@ function preprocessForOcr(file, crop, { contrast = 1.35, saturation = 1.2, thres
 async function scanRosterRegion(file) {
   const variants = [
     {
+      crop: { x: 0.02, y: 0.16, width: 0.42, height: 0.7 },
+      image: { contrast: 1.42, saturation: 1.12, threshold: 180 },
+    },
+    {
       crop: { x: 0.02, y: 0.14, width: 0.54, height: 0.78 },
       image: { contrast: 1.35, saturation: 1.2, threshold: 185 },
     },
@@ -131,6 +135,10 @@ async function scanRosterRegion(file) {
     {
       crop: { x: 0.08, y: 0.19, width: 0.74, height: 0.5 },
       image: { contrast: 1.3, saturation: 1.1, threshold: null },
+    },
+    {
+      crop: { x: 0.01, y: 0.18, width: 0.44, height: 0.74 },
+      image: { contrast: 1.5, saturation: 1.08, threshold: 172 },
     },
   ];
 
@@ -217,8 +225,17 @@ async function scanRosterRegion(file) {
 
 function normalizeParticipants(participants = []) {
   return (Array.isArray(participants) ? participants : [])
-    .map((participant) => typeof participant === "string" ? { name: participant } : participant)
-    .filter((participant) => participant?.name);
+    .map((participant) => {
+      if (typeof participant === "string") return { name: participant };
+      return participant && typeof participant === "object" ? participant : null;
+    })
+    .filter((participant) => participant?.name)
+    .map((participant) => ({
+      ...participant,
+      name: String(participant.name || "").trim(),
+      squad: Array.isArray(participant.squad) ? participant.squad : [],
+      soldPlayers: Array.isArray(participant.soldPlayers) ? participant.soldPlayers : [],
+    }));
 }
 
 function PlayerLeaderboard({ submissions, loading, title = "Ballon d'Or Table", subtitle = "" }) {
@@ -325,6 +342,14 @@ export function BallonDorPanel({
     if (whitelist.size === 0) return baseParticipants;
     return baseParticipants.filter((participant) => whitelist.has(participant.name));
   }, [allowedTeamNames, fixtureScopedTeams, isPublicUpload, participantOptions, publicContext.participants]);
+  const selectedParticipant = React.useMemo(
+    () => resolvedParticipants.find((participant) => participant.name === mappedParticipantName) || null,
+    [mappedParticipantName, resolvedParticipants]
+  );
+  const selectedParticipantRoster = React.useMemo(
+    () => (Array.isArray(selectedParticipant?.squad) ? selectedParticipant.squad : []),
+    [selectedParticipant]
+  );
 
   React.useEffect(() => {
     if (!isPublicUpload) return undefined;
@@ -442,19 +467,42 @@ export function BallonDorPanel({
       const scanResult = await scanRosterRegion(file);
       const rosterText = String(scanResult?.text || "").trim();
       const parsed = scanResult?.parsed || parsePerformanceCaptureText(rosterText);
+      const rosterAwareDraft = selectedParticipantRoster.length > 0
+        ? mergePerformanceCaptureWithRoster(parsed.players, selectedParticipantRoster)
+        : { players: parsed.players || [], rosterFallbackPlayerCount: 0, matchedRosterPlayerCount: 0, unmatchedOcrPlayerCount: 0 };
+      const nextDraft = {
+        ...parsed,
+        players: rosterAwareDraft.players,
+        rosterFallbackPlayerCount: rosterAwareDraft.rosterFallbackPlayerCount,
+        matchedRosterPlayerCount: rosterAwareDraft.matchedRosterPlayerCount,
+        unmatchedOcrPlayerCount: rosterAwareDraft.unmatchedOcrPlayerCount,
+      };
       if (!rosterText) {
         throw new Error("The scan took too long or could not read text from this image.");
       }
-      setDraft(parsed.players.length > 0 ? parsed : { ...parsed, players: [emptyPlayerRow(1)] });
-      if (parsed.players.length === 0) {
+      setDraft(nextDraft.players.length > 0 ? nextDraft : { ...nextDraft, players: [emptyPlayerRow(1)] });
+      if (nextDraft.players.length === 0) {
         setError("The scan finished, but it could not detect enough player rows. You can still fill them in manually.");
+      } else if (nextDraft.rosterFallbackPlayerCount > 0) {
+        setSuccessMessage(`Matched ${nextDraft.matchedRosterPlayerCount} player row(s) from OCR and filled ${nextDraft.rosterFallbackPlayerCount} roster row(s) with default stats for review.`);
       } else if (parsed.missingVisiblePlayerCount > 0) {
         setSuccessMessage(`Scanned ${parsed.players.length - parsed.missingVisiblePlayerCount} player row(s). Added ${parsed.missingVisiblePlayerCount} blank row(s) so you can finish the missing visible players manually.`);
       } else {
         setSuccessMessage(`Scanned ${parsed.players.length} player row(s). Review them and save.`);
       }
     } catch (err) {
-      setDraft({ ...emptyDraft(), players: [emptyPlayerRow(1)] });
+      const rosterFallbackDraft = selectedParticipantRoster.length > 0
+        ? mergePerformanceCaptureWithRoster([], selectedParticipantRoster)
+        : null;
+      setDraft(rosterFallbackDraft?.players?.length > 0
+        ? {
+            ...emptyDraft(),
+            players: rosterFallbackDraft.players,
+            rosterFallbackPlayerCount: rosterFallbackDraft.rosterFallbackPlayerCount,
+            matchedRosterPlayerCount: rosterFallbackDraft.matchedRosterPlayerCount,
+            unmatchedOcrPlayerCount: rosterFallbackDraft.unmatchedOcrPlayerCount,
+          }
+        : { ...emptyDraft(), players: [emptyPlayerRow(1)] });
       setError(`Could not scan this image. You can still enter the data manually. ${err.message || ""}`.trim());
     } finally {
       setOcrBusy(false);
@@ -534,7 +582,7 @@ export function BallonDorPanel({
   const handleSave = async () => {
     const players = (draft.players || [])
       .map((player) => ({
-        ...player,
+        id: player.id,
         name: String(player.name || "").trim(),
         rating: player.rating === "" ? null : Number(player.rating),
         goals: player.goals === "" ? 0 : Number(player.goals || 0),
@@ -691,6 +739,7 @@ export function BallonDorPanel({
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                       <input value={player.name} placeholder={`Player ${index + 1}`} onChange={(event) => updatePlayer(player.id, "name", event.target.value)} style={{ background: "#0d1119", color: "#fff", border: "1px solid #263247", borderRadius: 8, padding: "10px 12px", minWidth: 0, flex: "1 1 240px", width: "100%" }} />
                       {player.isManualPlaceholder ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#FFD700", fontWeight: 700, letterSpacing: 1 }}>MANUAL</div> : null}
+                      {!player.isManualPlaceholder && player.isRosterFallback ? <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba", fontWeight: 700, letterSpacing: 1 }}>ROSTER</div> : null}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: compactLayout ? "repeat(3,minmax(0,1fr))" : "repeat(3,minmax(72px,110px)) minmax(0,1fr) auto", gap: 8, alignItems: "center" }}>
                       {[

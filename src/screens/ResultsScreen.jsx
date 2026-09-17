@@ -945,7 +945,7 @@ export function ResultsScreen({
   };
 
   const handleStartTransfer = async () => {
-    if (!isHost || !onStartTransferWindow || startingTransferWindow || !firstRoundComplete || transferWindowAlreadyOpened) return;
+    if (!isHost || !onStartTransferWindow || startingTransferWindow || !firstRoundComplete) return;
     setStartingTransferWindow(true);
     try {
       await onStartTransferWindow({
@@ -1045,7 +1045,7 @@ export function ResultsScreen({
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
           groupsEnabled && isHost && onStartTransferWindow && React.createElement("button", {
             onClick: handleStartTransfer,
-            disabled: startingTransferWindow || !firstRoundComplete || transferWindowAlreadyOpened,
+            disabled: startingTransferWindow || !firstRoundComplete,
             style: {
               background: "#4FC3F718",
               color: "#4FC3F7",
@@ -1056,9 +1056,9 @@ export function ResultsScreen({
               fontFamily: "'Bebas Neue'",
               fontSize: 14,
               letterSpacing: 1,
-              opacity: startingTransferWindow || !firstRoundComplete || transferWindowAlreadyOpened ? 0.6 : 1,
+              opacity: startingTransferWindow || !firstRoundComplete ? 0.6 : 1,
             }
-          }, startingTransferWindow ? "OPENING TRANSFER…" : transferWindowAlreadyOpened ? "TRANSFER WINDOW OPENED" : firstRoundComplete ? "OPEN MID-SEASON TRANSFER" : "PLAY ALL FIRST-ROUND MATCHES"),
+          }, startingTransferWindow ? "OPENING TRANSFER…" : transferWindowAlreadyOpened ? "REOPEN TRANSFER WINDOW" : firstRoundComplete ? "OPEN MID-SEASON TRANSFER" : "PLAY ALL FIRST-ROUND MATCHES"),
           React.createElement("button", {
             onClick: () => setAnalyserOpen(true),
             style: {

@@ -10,7 +10,8 @@ function looksLikePlayerName(line) {
   const value = normalizeLine(line);
   if (!value) return false;
   if (value.length > 36) return false;
-  if (/^(player performance|name|back|sort|scroll|summary|possession|shooting|passing|defending|goalkeeping|overall position|overall rating|ovr|total rating|goals|assists|shots|shot accuracy|passes|pass accuracy|dribbles|dribble success|tackles|tackle success|offsides|fouls committed|possession won|possession lost|minutes played|distance covered|distance sprinted)$/i.test(value)) {
+  const compact = value.replace(/[^A-Za-z]/g, "").toLowerCase();
+  if (/^(playerperformance|name|back|sort|scroll|summary|possession|shooting|passing|defending|goalkeeping|overallposition|overallrating|ovr|totalrating|goals|assists|shots|shotaccuracy|passes|passaccuracy|dribbles|dribblesuccess|tackles|tacklesuccess|offsides|foulscommitted|possessionwon|possessionlost|minutesplayed|distancecovered|distancesprinted)$/i.test(compact)) {
     return false;
   }
   if (/^[0-9.-]+$/.test(value)) return false;
@@ -32,8 +33,77 @@ function normalizeTeamKey(value = "") {
   return String(value || "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
 }
 
-function normalizePlayerKey(value = "") {
+export function normalizePlayerKey(value = "") {
   return String(value || "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
+function isCompatiblePlayerKey(left = "", right = "") {
+  const a = normalizePlayerKey(left);
+  const b = normalizePlayerKey(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  if (shorter.length < 4) return false;
+  return longer.includes(shorter);
+}
+
+export function mergePerformanceCaptureWithRoster(players = [], rosterPlayers = []) {
+  const ocrRows = Array.isArray(players) ? players : [];
+  const roster = (Array.isArray(rosterPlayers) ? rosterPlayers : [])
+    .map((player, index) => ({
+      id: player?.id ?? `roster-${index + 1}`,
+      name: normalizeLine(player?.name || player?.longName || ""),
+      rating: "",
+      goals: "",
+      assists: "",
+      isPlayerOfTheMatch: false,
+      isRosterFallback: true,
+      rosterIndex: index,
+      rosterSource: player,
+    }))
+    .filter((player) => player.name);
+
+  const usedOcrIds = new Set();
+  const mergedPlayers = roster.map((rosterPlayer) => {
+    const matchedOcr = ocrRows.find((row) => {
+      if (!row || usedOcrIds.has(row.id)) return false;
+      return isCompatiblePlayerKey(row.name, rosterPlayer.name);
+    });
+
+    if (!matchedOcr) return rosterPlayer;
+
+    usedOcrIds.add(matchedOcr.id);
+    const rowName = normalizeLine(matchedOcr.name);
+    return {
+      ...rosterPlayer,
+      ...matchedOcr,
+      name: rosterPlayer.name,
+      ocrName: rowName && rowName !== rosterPlayer.name ? rowName : "",
+      isRosterFallback: false,
+    };
+  });
+
+  const leftoverOcrRows = ocrRows
+    .filter((row) => row && !usedOcrIds.has(row.id) && normalizeLine(row.name))
+    .map((row) => ({
+      ...row,
+      isRosterFallback: false,
+      isOcrOnly: true,
+    }));
+
+  return {
+    players: [...mergedPlayers, ...leftoverOcrRows],
+    rosterFallbackPlayerCount: mergedPlayers.filter((player) => player.isRosterFallback).length,
+    matchedRosterPlayerCount: mergedPlayers.filter((player) => !player.isRosterFallback).length,
+    unmatchedOcrPlayerCount: leftoverOcrRows.length,
+  };
+}
+
+function isNoisePlayerName(value = "") {
+  const compact = String(value || "").replace(/[^A-Za-z]/g, "").toLowerCase();
+  return /^(playerperformance|summary|possessionwon|possessionlost|minutesplayed|distancecovered|distancesprinted|shotaccuracy|passaccuracy|dribblesuccess|tacklesuccess|overallposition|overallrating|totalrating|goals|assists|ovr)$/i.test(compact);
 }
 
 function parseNumericBlock(lines, startIndex, endIndex, { allowFloat = false, max = 99 } = {}) {
@@ -108,7 +178,22 @@ function normalizeDetectedPlayerName(value) {
   const tokens = normalized.split(" ").filter(Boolean);
   if (tokens.length <= 1) return normalized;
 
+  const shouldDropLeadingToken = (token) => {
+    const compact = String(token || "").replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
+    const raw = String(token || "");
+    if (!compact) return true;
+    if (/^(OVR|OVERALL|RATING|TOTAL|SUMMARY)$/i.test(compact)) return true;
+    if (/^OVR/i.test(compact)) return true;
+    if (/^[^A-Za-zÀ-ÖØ-öø-ÿ]+$/.test(raw)) return true;
+    if (compact.length <= 1 && !raw.includes(".")) return true;
+    if (/^[A-Z]{2,3}$/.test(compact) && raw.includes(".") === false && /^(LY|SV|VR)$/i.test(compact)) return true;
+    return false;
+  };
+
   const nextTokens = [...tokens];
+  while (nextTokens.length > 1 && shouldDropLeadingToken(nextTokens[0])) {
+    nextTokens.shift();
+  }
   while (nextTokens.length > 1) {
     const last = nextTokens[nextTokens.length - 1];
     const alphaOnly = last.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
@@ -230,7 +315,9 @@ function parsePlayerRowLine(line) {
 
   const name = normalizeDetectedPlayerName(nameSource);
   const alphaOnlyName = name.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
+  const compactName = alphaOnlyName.toLowerCase();
   if (!name || alphaOnlyName.length < 4 || looksLikeTeamName(name)) return null;
+  if (/^(ovr|overallrating|totalrating|playerperformance|summary|possessionwon|possessionlost|minutesplayed|distancecovered|distancesprinted|shotaccuracy|passaccuracy|dribblesuccess|tacklesuccess)$/i.test(compactName)) return null;
 
   const trailingStats = numericCandidates
     .filter((entry) => entry.index > ratingIndex && entry.value <= 20 && !/%/.test(entry.token))
@@ -296,12 +383,12 @@ export function extractFeaturedPlayerCard(rawText = "", lines = []) {
     const candidateName = normalizeDetectedPlayerName(nameLines.join(" "));
     if (!candidateName || candidateName.length < 4 || looksLikeTeamName(candidateName)) continue;
 
-    const ratingLine = prefix.slice(cursor, Math.min(prefix.length, cursor + 4)).find((line) => {
-      const rating = parseRatingToken(line);
-      return rating !== null && rating >= 4 && rating <= 10;
-    });
-    const rating = ratingLine ? parseRatingToken(ratingLine) : null;
-    if (rating === null) continue;
+    const rating = prefix
+      .slice(cursor, Math.min(prefix.length, cursor + 4))
+      .flatMap((line) => normalizeLine(line).split(" ").filter(Boolean))
+      .map((token) => parseRatingToken(token))
+      .find((token) => token !== null);
+    if (rating == null) continue;
 
     return { name: candidateName, rating };
   }
@@ -351,7 +438,7 @@ export function parsePerformanceCaptureText(rawText = "") {
   const resolvedGoals = fuzzyPlayerRows.length > 0 ? goals : fallbackGoals;
   const resolvedAssists = fuzzyPlayerRows.length > 0 ? assists : fallbackAssists;
 
-  if (featuredPlayerCard) {
+  if (!fuzzyPlayerRows.length && featuredPlayerCard && featuredPlayerCard.name && !/(ovr|overall|rating|summary)/i.test(featuredPlayerCard.name)) {
     const featuredKey = normalizePlayerKey(featuredPlayerCard.name);
     const resolvedKeys = resolvedNames.map((name) => normalizePlayerKey(name));
     if (featuredKey && !resolvedKeys.includes(featuredKey)) {
@@ -370,7 +457,7 @@ export function parsePerformanceCaptureText(rawText = "") {
     goals: Number.isFinite(resolvedGoals[index]) ? resolvedGoals[index] : 0,
     assists: Number.isFinite(resolvedAssists[index]) ? resolvedAssists[index] : 0,
     isPlayerOfTheMatch: false,
-  }));
+  })).filter((player) => !isNoisePlayerName(player.name));
   const expectedVisiblePlayerCount = Math.max(parsedPlayers.length, countVisiblePlayerSlots(lines));
   const missingVisiblePlayerCount = Math.max(0, expectedVisiblePlayerCount - parsedPlayers.length);
   const players = [
@@ -422,6 +509,9 @@ export function validatePerformanceCaptureDraft({
   }
   if (populatedPlayers.length < 5) warnings.push("We could only detect a few player rows. Try a cleaner screenshot or add rows manually.");
   if (numericRatings.length < 3) warnings.push("Too few rating values were detected. Review the RR column manually.");
+  if (Number(draft?.rosterFallbackPlayerCount) > 0) {
+    warnings.push(`We filled ${draft.rosterFallbackPlayerCount} player row(s) from the selected team roster. Review RR, G and AST for those rows.`);
+  }
   if (Number(draft?.missingVisiblePlayerCount) > 0) {
     warnings.push(`Some visible player rows were not scanned. Please manually complete the ${draft.missingVisiblePlayerCount} blank row(s).`);
   }
