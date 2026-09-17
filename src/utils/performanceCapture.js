@@ -10,7 +10,7 @@ function looksLikePlayerName(line) {
   const value = normalizeLine(line);
   if (!value) return false;
   if (value.length > 36) return false;
-  if (/^(player performance|name|back|sort|scroll|summary|possession|shooting|passing|defending|goalkeeping|overall position|total rating|goals|assists|shots|shot accuracy|passes|pass accuracy|dribbles|dribble success|tackles|tackle success|offsides|fouls committed|possession won|possession lost|minutes played|distance covered|distance sprinted)$/i.test(value)) {
+  if (/^(player performance|name|back|sort|scroll|summary|possession|shooting|passing|defending|goalkeeping|overall position|overall rating|ovr|total rating|goals|assists|shots|shot accuracy|passes|pass accuracy|dribbles|dribble success|tackles|tackle success|offsides|fouls committed|possession won|possession lost|minutes played|distance covered|distance sprinted)$/i.test(value)) {
     return false;
   }
   if (/^[0-9.-]+$/.test(value)) return false;
@@ -103,6 +103,7 @@ function cleanNameToken(token) {
 
 function normalizeDetectedPlayerName(value) {
   let normalized = normalizeLine(value);
+  normalized = normalized.replace(/^(?:OVR|Overall(?:\s+Rating)?|Rating|Summary)\s+/i, "");
   normalized = normalized.replace(/\s+(?:Total Rating|Player of the Match|Summary).*$/i, "");
   const tokens = normalized.split(" ").filter(Boolean);
   if (tokens.length <= 1) return normalized;
@@ -111,6 +112,11 @@ function normalizeDetectedPlayerName(value) {
   while (nextTokens.length > 1) {
     const last = nextTokens[nextTokens.length - 1];
     const alphaOnly = last.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "");
+    const first = nextTokens[0];
+    if (/^(?:OVR|Overall|Rating)$/i.test(first)) {
+      nextTokens.shift();
+      continue;
+    }
     const hasStableEarlierToken = nextTokens.slice(0, -1).some((token) => token.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, "").length >= 3);
     const looksLikeTrailingNoise = alphaOnly.length <= 1
       || ((alphaOnly.length <= 2 || /^[A-Z]{1,2}$/.test(alphaOnly)) && hasStableEarlierToken && !last.includes("."));
@@ -161,7 +167,7 @@ function parsePlayerRowLine(line) {
       && normalizedName
       && normalizedName.length >= 4
       && !looksLikeTeamName(normalizedName)
-      && !/(total rating|player of the match|goal|assist|summary)/i.test(normalizedName)
+      && !/(ovr|overall rating|total rating|player of the match|goal|assist|summary)/i.test(normalizedName)
     ) {
       return {
         name: normalizedName,
