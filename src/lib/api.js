@@ -264,8 +264,10 @@ export async function apiGetPublicBallonDorUploadContext(auctionResultId, upload
     auctionResultId: data?.auctionResultId || auctionResultId,
     leagueName: data?.leagueName || "League",
     participantNames: Array.isArray(data?.participantNames) ? data.participantNames : [],
+    participants: Array.isArray(data?.participants) ? data.participants : [],
     fixtures: Array.isArray(data?.fixtures) ? data.fixtures : [],
     fixedFixtureId: data?.fixedFixtureId || fixtureId || "",
+    submissions: Array.isArray(data?.submissions) ? data.submissions : [],
   };
 }
 

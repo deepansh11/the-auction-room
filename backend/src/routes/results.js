@@ -32,6 +32,43 @@ function findFixtureGroup(fixtures = {}, fixtureId) {
   return null;
 }
 
+function pickUploadParticipants(result, fixtureId = "") {
+  const fixtureTeams = fixtureId
+    ? new Set(
+        flattenFixtures(result?.fixtures || {})
+          .filter((fixture) => String(fixture?.id) === String(fixtureId))
+          .flatMap((fixture) => [fixture.home, fixture.away])
+          .filter(Boolean)
+      )
+    : null;
+
+  return (Array.isArray(result?.participants) ? result.participants : [])
+    .filter((participant) => participant?.name)
+    .filter((participant) => !fixtureTeams || fixtureTeams.has(participant.name))
+    .map((participant) => ({
+      name: String(participant.name || "").trim(),
+      squad: Array.isArray(participant.squad)
+        ? participant.squad.map((player) => ({
+            id: player?.id,
+            name: String(player?.name || "").trim(),
+            rating: Number.isFinite(Number(player?.rating)) ? Number(player.rating) : null,
+            pos: String(player?.pos || "").trim(),
+          }))
+        : [],
+    }));
+}
+
+async function loadPerformanceSubmissions(db, auctionResultId, fixtureId = "") {
+  const snap = await db.collection("auctionPerformanceSubmissions")
+    .where("auctionResultId", "==", auctionResultId)
+    .get();
+
+  return snap.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((submission) => !fixtureId || String(submission?.fixtureId) === String(fixtureId))
+    .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
+}
+
 function sanitizeSubmissionIdPart(value) {
   return String(value || "")
     .trim()
@@ -208,13 +245,7 @@ router.get("/results/:auctionResultId/ballon-dor-submissions", requireUserAuth, 
       return res.status(403).json({ error: "You are not allowed to view these submissions" });
     }
 
-    const snap = await db.collection("auctionPerformanceSubmissions")
-      .where("auctionResultId", "==", auctionResultId)
-      .get();
-
-    const submissions = snap.docs
-      .map((doc) => ({ id: doc.id, ...doc.data() }))
-      .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
+    const submissions = await loadPerformanceSubmissions(db, auctionResultId);
 
     return res.json({ submissions });
   } catch (err) {
@@ -292,10 +323,12 @@ router.get("/public/results/:auctionResultId/ballon-dor-upload", async (req, res
       auctionResultId,
       leagueName: result.seasonInfo?.leagueName || result.name || "League",
       participantNames: Array.isArray(result.participantNames) ? result.participantNames : [],
+      participants: pickUploadParticipants(result, requestedFixtureId),
       fixtures: requestedFixtureId
         ? flattenFixtures(result.fixtures).filter((fixture) => String(fixture.id) === requestedFixtureId)
         : flattenFixtures(result.fixtures),
       fixedFixtureId: requestedFixtureId,
+      submissions: await loadPerformanceSubmissions(db, auctionResultId, requestedFixtureId),
     });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to load Ballon dOr upload page", 500);

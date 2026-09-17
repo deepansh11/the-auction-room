@@ -247,6 +247,47 @@ function normalizeParticipants(participants = []) {
     }));
 }
 
+function upsertSubmissionList(submissions, nextSubmission) {
+  if (!nextSubmission?.id) return Array.isArray(submissions) ? submissions : [];
+  const current = Array.isArray(submissions) ? submissions : [];
+  const filtered = current.filter((submission) => submission?.id !== nextSubmission.id);
+  return [nextSubmission, ...filtered].sort((left, right) => Number(right?.updatedAt || 0) - Number(left?.updatedAt || 0));
+}
+
+function buildDraftFromSubmission(submission) {
+  return {
+    markers: {},
+    players: (Array.isArray(submission?.players) ? submission.players : []).map((player, index) => ({
+      id: String(player?.id || `saved-${index + 1}`),
+      name: String(player?.name || "").trim(),
+      rating: player?.rating ?? "",
+      goals: player?.goals ?? 0,
+      assists: player?.assists ?? 0,
+      isPlayerOfTheMatch: Boolean(player?.isPlayerOfTheMatch),
+    })),
+    rawText: "",
+    rosterFallbackPlayerCount: 0,
+    matchedRosterPlayerCount: 0,
+    unmatchedOcrPlayerCount: 0,
+    missingVisiblePlayerCount: 0,
+  };
+}
+
+function formatSubmissionTimestamp(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(value);
+  } catch (_) {
+    return "";
+  }
+}
+
 function PlayerLeaderboard({ submissions, loading, title = "Ballon d'Or Table", subtitle = "" }) {
   const ranking = React.useMemo(() => buildBallonDorRanking(submissions), [submissions]);
   const leader = ranking[0];
@@ -330,7 +371,7 @@ export function BallonDorPanel({
   const [error, setError] = React.useState("");
   const [successMessage, setSuccessMessage] = React.useState("");
   const [copiedLink, setCopiedLink] = React.useState("");
-  const [publicContext, setPublicContext] = React.useState({ loading: isPublicUpload, leagueName: "", participants: [], fixtures: [], fixedFixtureId: "" });
+  const [publicContext, setPublicContext] = React.useState({ loading: isPublicUpload, leagueName: "", participants: [], fixtures: [], fixedFixtureId: "", submissions: [] });
   const [compactLayout, setCompactLayout] = React.useState(() => (typeof window !== "undefined" ? window.innerWidth < 720 : false));
   const fileInputRef = React.useRef(null);
 
@@ -381,17 +422,19 @@ export function BallonDorPanel({
   React.useEffect(() => {
     if (!isPublicUpload) return undefined;
     let cancelled = false;
-    setPublicContext({ loading: true, leagueName: "", participants: [], fixtures: [], fixedFixtureId: selectedFixtureId || "" });
+    setPublicContext({ loading: true, leagueName: "", participants: [], fixtures: [], fixedFixtureId: selectedFixtureId || "", submissions: [] });
     apiGetPublicBallonDorUploadContext(auctionResultId, publicAccessToken, selectedFixtureId)
       .then((data) => {
         if (cancelled) return;
         setPublicContext({
           loading: false,
           leagueName: data.leagueName,
-          participants: normalizeParticipants(data.participantNames),
+          participants: normalizeParticipants((Array.isArray(data.participants) && data.participants.length > 0) ? data.participants : data.participantNames),
           fixtures: Array.isArray(data.fixtures) ? data.fixtures : [],
           fixedFixtureId: data.fixedFixtureId || "",
+          submissions: Array.isArray(data.submissions) ? data.submissions : [],
         });
+        setSubmissions(Array.isArray(data.submissions) ? data.submissions : []);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -484,6 +527,29 @@ export function BallonDorPanel({
     : scannedPlayerCount > targetPlayerCount
       ? "overflow"
       : "under";
+  const activeFixtureId = fixedFixtureId || fixtureId;
+  const activeFixture = React.useMemo(
+    () => resolvedFixtures.find((fixture) => String(fixture.id) === String(activeFixtureId)) || null,
+    [activeFixtureId, resolvedFixtures]
+  );
+  const fixtureSubmissions = React.useMemo(() => {
+    const relevantFixtureId = String(activeFixtureId || "");
+    if (!relevantFixtureId) return [];
+    const fixtureTeams = activeFixture ? [activeFixture.home, activeFixture.away] : [];
+    const fixtureOrder = new Map(fixtureTeams.map((teamName, index) => [teamName, index]));
+    return (Array.isArray(submissions) ? submissions : [])
+      .filter((submission) => String(submission?.fixtureId) === relevantFixtureId)
+      .sort((left, right) => {
+        const leftRank = fixtureOrder.has(left?.mappedParticipantName) ? fixtureOrder.get(left.mappedParticipantName) : Number.MAX_SAFE_INTEGER;
+        const rightRank = fixtureOrder.has(right?.mappedParticipantName) ? fixtureOrder.get(right.mappedParticipantName) : Number.MAX_SAFE_INTEGER;
+        if (leftRank !== rightRank) return leftRank - rightRank;
+        return String(left?.mappedParticipantName || "").localeCompare(String(right?.mappedParticipantName || ""));
+      });
+  }, [activeFixture, activeFixtureId, submissions]);
+  const selectedTeamSubmission = React.useMemo(
+    () => fixtureSubmissions.find((submission) => submission?.mappedParticipantName === mappedParticipantName) || null,
+    [fixtureSubmissions, mappedParticipantName]
+  );
 
   const processPickedImage = async (file) => {
     if (!file || !file.type?.startsWith("image/")) {
@@ -574,6 +640,20 @@ export function BallonDorPanel({
     });
     setError("");
     setSuccessMessage(`Loaded ${rosterFallbackDraft.players.length} default squad row(s) from ${selectedParticipant?.name || "the selected team"}.`);
+  };
+
+  const loadSavedSubmission = (submission) => {
+    if (!submission) return;
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl("");
+    }
+    setMappedParticipantName(String(submission.mappedParticipantName || ""));
+    setFixtureId(String(submission.fixtureId || ""));
+    setDraft(buildDraftFromSubmission(submission));
+    setSelectedFileName(String(submission.sourceFileName || ""));
+    setError("");
+    setSuccessMessage(`Loaded previously saved stats for ${submission.mappedParticipantName}.`);
   };
 
   const handleFilePicked = async (event) => {
@@ -677,11 +757,17 @@ export function BallonDorPanel({
         players,
         submittedBy: isPublicUpload ? mappedParticipantName : user?.username || mappedParticipantName,
       };
-      if (isPublicUpload) {
-        await apiSavePublicBallonDorSubmission(auctionResultId, payload, publicAccessToken, fixedFixtureId);
-      } else {
-        await apiSaveBallonDorSubmission(auctionResultId, payload, user?.token);
-        await loadSubmissions();
+      const savedSubmission = isPublicUpload
+        ? await apiSavePublicBallonDorSubmission(auctionResultId, payload, publicAccessToken, fixedFixtureId)
+        : await apiSaveBallonDorSubmission(auctionResultId, payload, user?.token);
+      if (savedSubmission?.id) {
+        setSubmissions((prev) => upsertSubmissionList(prev, savedSubmission));
+        if (isPublicUpload) {
+          setPublicContext((prev) => ({
+            ...prev,
+            submissions: upsertSubmissionList(prev.submissions, savedSubmission),
+          }));
+        }
       }
       setSuccessMessage("Performance upload saved.");
       resetDraft({ preserveTeam: true, preserveFixture: true, preserveSuccess: true });
@@ -824,6 +910,22 @@ export function BallonDorPanel({
                  </select>
                </label>
               </div>
+             {selectedTeamSubmission ? (
+               <div style={{ marginTop: 10, padding: 10, borderRadius: 12, border: "1px solid rgba(143,231,192,.24)", background: "rgba(143,231,192,.08)", display: "grid", gap: 6 }}>
+                 <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                   <div>
+                     <div style={{ fontFamily: "'Rajdhani'", fontSize: 10, color: "#8fe7c0", fontWeight: 700, letterSpacing: 1.5, textTransform: "uppercase" }}>Saved upload found</div>
+                     <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#d7deea", marginTop: 2 }}>
+                       {selectedTeamSubmission.mappedParticipantName} · {selectedTeamSubmission.players?.length || 0} players
+                       {formatSubmissionTimestamp(selectedTeamSubmission.updatedAt) ? ` · ${formatSubmissionTimestamp(selectedTeamSubmission.updatedAt)}` : ""}
+                     </div>
+                   </div>
+                   <button onClick={() => loadSavedSubmission(selectedTeamSubmission)} style={{ background: "#0d1119", color: "#8fe7c0", border: "1px solid rgba(143,231,192,.28)", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1 }}>
+                     LOAD SAVED STATS
+                   </button>
+                 </div>
+               </div>
+             ) : null}
             </div>
 
             <div style={surfaceStyle()}>
@@ -877,6 +979,50 @@ export function BallonDorPanel({
               ) : null}
             </div>
           </div>
+          {activeFixture ? (
+            <div style={surfaceStyle()}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline", flexWrap: "wrap", marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontFamily: "'Bebas Neue'", fontSize: 18, color: "#FFD700", letterSpacing: 2 }}>Saved Match Stats</div>
+                  <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6", marginTop: 4 }}>
+                    {activeFixture.home} vs {activeFixture.away} · {fixtureSubmissions.length}/2 teams uploaded
+                  </div>
+                </div>
+              </div>
+              {fixtureSubmissions.length === 0 ? (
+                <div style={{ fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" }}>No saved player stats for this match yet.</div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 12 }}>
+                  {fixtureSubmissions.map((submission) => (
+                    <div key={submission.id} style={{ background: "#08111a", border: "1px solid #1e293b", borderRadius: 14, padding: 12, display: "grid", gap: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontFamily: "'Bebas Neue'", fontSize: 20, color: "#fff", letterSpacing: 1 }}>{submission.mappedParticipantName}</div>
+                          <div style={{ fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6", marginTop: 2 }}>
+                            {submission.players?.length || 0} players
+                            {formatSubmissionTimestamp(submission.updatedAt) ? ` · ${formatSubmissionTimestamp(submission.updatedAt)}` : ""}
+                          </div>
+                        </div>
+                        <button onClick={() => loadSavedSubmission(submission)} style={{ background: "#0d1119", color: "#8fe7c0", border: "1px solid rgba(143,231,192,.28)", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontFamily: "'Bebas Neue'", fontSize: 11, letterSpacing: 1 }}>
+                          LOAD INTO EDITOR
+                        </button>
+                      </div>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {(submission.players || []).map((player) => (
+                          <div key={`${submission.id}-${player.id || player.name}`} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) repeat(3,48px)", gap: 8, alignItems: "center", fontFamily: "'Rajdhani'", fontSize: 12 }}>
+                            <div style={{ color: "#e5edf8", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{player.name}</div>
+                            <div style={{ color: "#4FC3F7", textAlign: "center" }}>{player.rating ?? "—"}</div>
+                            <div style={{ color: "#8fe7c0", textAlign: "center" }}>{player.goals ?? 0}</div>
+                            <div style={{ color: "#8fe7c0", textAlign: "center" }}>{player.assists ?? 0}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : null}
         </React.Fragment>
       )}
     </div>

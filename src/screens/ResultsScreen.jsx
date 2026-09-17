@@ -3,7 +3,7 @@ import { BallonDorPanel } from "../components/BallonDorPanel.jsx";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
 import { computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
-import { apiGetFixtures, apiSaveFixtureScore, apiSaveFixtures } from "../lib/api.js";
+import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateSession } from "../lib/api.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
 import { trackEvent } from "../lib/analytics.js";
 
@@ -694,6 +694,25 @@ function getFixturesLastUpdated(fixtures) {
   return (fixtures || []).reduce((max, fixture) => Math.max(max, Number(fixture?.scoreUpdatedAt) || 0), 0);
 }
 
+function getPlayerAcquisitionPrice(player, tiers = TIERS) {
+  const explicitPrice = Number(player?.purchasePrice);
+  if (Number.isFinite(explicitPrice)) return explicitPrice;
+  const rating = Number(player?.rating);
+  return Number(getTierData(rating, tiers)?.price || 0);
+}
+
+function filterInventoryPlayers(rows, { search = "", owner = "ALL", pos = "ALL", tier = "ALL", tiers = TIERS } = {}) {
+  const needle = String(search || "").trim().toLowerCase();
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (owner !== "ALL" && row.owner !== owner) return false;
+    if (pos !== "ALL" && row.pos !== pos) return false;
+    if (tier !== "ALL" && getTierKey(row.rating, tiers) !== tier) return false;
+    if (!needle) return true;
+    return String(row.name || "").toLowerCase().includes(needle)
+      || String(row.owner || "").toLowerCase().includes(needle);
+  });
+}
+
 export function ResultsScreen({
   participants,
   wishlists,
@@ -747,6 +766,10 @@ export function ResultsScreen({
   const [knockoutPublished, setKnockoutPublished] = React.useState(false);
   const [loadingLatest, setLoadingLatest] = React.useState(false);
   const [startingTransferWindow, setStartingTransferWindow] = React.useState(false);
+  const [transferSessionState, setTransferSessionState] = React.useState(null);
+  const [transferSyncLoading, setTransferSyncLoading] = React.useState(false);
+  const [transferActionPlayerId, setTransferActionPlayerId] = React.useState("");
+  const [transferActionMessage, setTransferActionMessage] = React.useState("");
   const saveFixturesTimerRef = React.useRef(null);
   const nameMap = React.useMemo(() => buildNameMap(participants, groups), [participants, groups]);
 
@@ -867,6 +890,23 @@ export function ResultsScreen({
   }, [groupsEnabled, resolvedGroups, resolvedFixturesByGroup]);
 
   const transferWindowAlreadyOpened = Boolean(transferWindow?.activeSessionId || transferWindow?.openedAt);
+  const transferSessionId = String(transferWindow?.activeSessionId || "");
+
+  const loadTransferSession = React.useCallback(async () => {
+    if (!transferSessionId || !user?.token) {
+      setTransferSessionState(null);
+      return;
+    }
+    setTransferSyncLoading(true);
+    try {
+      const latest = await apiGetSession(transferSessionId, user.token);
+      setTransferSessionState(latest || null);
+    } catch (_err) {
+      setTransferSessionState(null);
+    } finally {
+      setTransferSyncLoading(false);
+    }
+  }, [transferSessionId, user?.token]);
 
   const loadLatestFixtures = React.useCallback(async () => {
     if (!auctionResultId || !user?.token) return;
@@ -889,21 +929,77 @@ export function ResultsScreen({
     loadLatestFixtures();
   }, [auctionResultId, loadLatestFixtures]);
 
-  const allPicks = React.useMemo(() => participants.flatMap((participant) => participant.squad.map((player) => ({
-    ...player,
-    owner: participant.name,
-    ownerIdx: participants.findIndex((entry) => entry.name === participant.name),
-  }))), [participants]);
+  React.useEffect(() => {
+    loadTransferSession();
+  }, [loadTransferSession]);
 
-  const filteredAllPicks = React.useMemo(() => allPicks
-    .filter((player) => historyOwnerFilter === "ALL" || player.owner === historyOwnerFilter)
-    .filter((player) => historyPosFilter === "ALL" || player.pos === historyPosFilter)
-    .filter((player) => historyTierFilter === "ALL" || getTierKey(player.rating, tiers) === historyTierFilter)
-    .filter((player) => {
-      if (!historySearch) return true;
-      const needle = historySearch.toLowerCase();
-      return player.name.toLowerCase().includes(needle) || player.owner.toLowerCase().includes(needle);
-    }), [allPicks, historyOwnerFilter, historyPosFilter, historyTierFilter, historySearch, tiers]);
+  const effectiveTransferWindow = transferSessionState?.transferWindow || transferWindow || {};
+  const inventoryParticipants = React.useMemo(
+    () => (Array.isArray(transferSessionState?.participants) && transferSessionState.participants.length > 0 ? transferSessionState.participants : participants),
+    [participants, transferSessionState?.participants]
+  );
+  const purchasedPlayers = React.useMemo(() => inventoryParticipants.flatMap((participant) => {
+    const ownerIdx = participants.findIndex((entry) => entry.name === participant.name);
+    const squadRows = (Array.isArray(participant?.squad) ? participant.squad : []).map((player) => ({
+      ...player,
+      owner: participant.name,
+      ownerIdx,
+      isTransferListed: false,
+      transferPrice: getPlayerAcquisitionPrice(player, tiers),
+    }));
+    const listedRows = (Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : []).map((player) => ({
+      ...player,
+      owner: participant.name,
+      ownerIdx,
+      isTransferListed: true,
+      transferPrice: Number(player?.salePrice) || getPlayerAcquisitionPrice(player, tiers),
+    }));
+    return [...squadRows, ...listedRows];
+  }), [inventoryParticipants, participants, tiers]);
+  const purchasedPlayerIds = React.useMemo(
+    () => new Set(purchasedPlayers.map((player) => Number(player?.id)).filter(Number.isFinite)),
+    [purchasedPlayers]
+  );
+  const transferListedPlayers = React.useMemo(
+    () => purchasedPlayers.filter((player) => player.isTransferListed),
+    [purchasedPlayers]
+  );
+  const unpurchasedPlayers = React.useMemo(() => (Array.isArray(players) ? players : [])
+    .filter((player) => Number.isFinite(Number(player?.id)))
+    .filter((player) => !purchasedPlayerIds.has(Number(player.id)))
+    .map((player) => ({
+      ...player,
+      owner: "",
+      ownerIdx: -1,
+      isTransferListed: false,
+      transferPrice: getPlayerAcquisitionPrice(player, tiers),
+    })), [players, purchasedPlayerIds, tiers]);
+  const filteredPurchasedPlayers = React.useMemo(() => filterInventoryPlayers(purchasedPlayers, {
+    search: historySearch,
+    owner: historyOwnerFilter,
+    pos: historyPosFilter,
+    tier: historyTierFilter,
+    tiers,
+  }), [historyOwnerFilter, historyPosFilter, historySearch, historyTierFilter, purchasedPlayers, tiers]);
+  const filteredUnpurchasedPlayers = React.useMemo(() => filterInventoryPlayers(unpurchasedPlayers, {
+    search: historySearch,
+    owner: "ALL",
+    pos: historyPosFilter,
+    tier: historyTierFilter,
+    tiers,
+  }), [historyPosFilter, historySearch, historyTierFilter, tiers, unpurchasedPlayers]);
+  const filteredTransferListedPlayers = React.useMemo(() => filterInventoryPlayers(transferListedPlayers, {
+    search: historySearch,
+    owner: historyOwnerFilter,
+    pos: historyPosFilter,
+    tier: historyTierFilter,
+    tiers,
+  }), [historyOwnerFilter, historyPosFilter, historySearch, historyTierFilter, tiers, transferListedPlayers]);
+  const myTransferParticipant = React.useMemo(
+    () => inventoryParticipants.find((participant) => participant.name === selectedName) || null,
+    [inventoryParticipants, selectedName]
+  );
+  const transferListingEditable = Boolean(transferSessionId && transferSessionState && effectiveTransferWindow.phase === "selling");
 
   const handleFixtureGoalChange = (groupLabel, fixtureId, side, rawValue) => {
     const value = rawValue === "" ? null : Math.max(0, parseInt(rawValue, 10) || 0);
@@ -973,6 +1069,172 @@ export function ResultsScreen({
     } finally {
       setStartingTransferWindow(false);
     }
+  };
+
+  const handleToggleTransferListing = async (player) => {
+    if (!transferListingEditable || !transferSessionState?.id || !user?.token || !player?.owner || player.owner !== selectedName) return;
+    const activeParticipants = Array.isArray(transferSessionState.participants) ? transferSessionState.participants : [];
+    const ownerParticipant = activeParticipants.find((participant) => participant.name === player.owner);
+    if (!ownerParticipant) return;
+
+    const requiredSalesMin = Number(effectiveTransferWindow.requiredSalesMin || 2);
+    const requiredSalesMax = Number(effectiveTransferWindow.requiredSalesMax || 5);
+    const listingPrice = Number(player?.salePrice) || getPlayerAcquisitionPrice(player, tiers);
+    const currentlyListed = (Array.isArray(ownerParticipant.soldPlayers) ? ownerParticipant.soldPlayers : []).some((entry) => Number(entry?.id) === Number(player.id));
+
+    if (!currentlyListed && (ownerParticipant.soldPlayers || []).length >= requiredSalesMax) {
+      setTransferActionMessage(`You can list at most ${requiredSalesMax} players.`);
+      return;
+    }
+
+    setTransferActionPlayerId(String(player.id));
+    setTransferActionMessage("");
+    try {
+      const nextParticipants = activeParticipants.map((participant) => {
+        if (participant.name !== player.owner) return participant;
+        const soldPlayers = Array.isArray(participant.soldPlayers) ? participant.soldPlayers : [];
+        const squad = Array.isArray(participant.squad) ? participant.squad : [];
+
+        if (currentlyListed) {
+          const restoredPlayer = soldPlayers.find((entry) => Number(entry?.id) === Number(player.id));
+          const nextSoldPlayers = soldPlayers.filter((entry) => Number(entry?.id) !== Number(player.id));
+          return {
+            ...participant,
+            budget: Math.max(0, Number(participant.budget || 0) - listingPrice),
+            squad: restoredPlayer
+              ? [...squad, { ...restoredPlayer, soldAt: undefined, salePrice: undefined, soldInTransferWindow: false }]
+              : squad,
+            soldPlayers: nextSoldPlayers,
+          };
+        }
+
+        return {
+          ...participant,
+          budget: Number(participant.budget || 0) + listingPrice,
+          squad: squad.filter((entry) => Number(entry?.id) !== Number(player.id)),
+          soldPlayers: [
+            ...soldPlayers,
+            {
+              ...player,
+              soldAt: Date.now(),
+              salePrice: listingPrice,
+              soldInTransferWindow: true,
+            },
+          ],
+        };
+      });
+
+      const nextCompletedBy = Array.from(new Set(nextParticipants
+        .filter((participant) => {
+          const count = (participant.soldPlayers || []).length;
+          return count >= requiredSalesMin && count <= requiredSalesMax;
+        })
+        .map((participant) => participant.name)));
+      const nextSoldPlayerIds = nextParticipants
+        .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
+        .map((entry) => Number(entry?.id))
+        .filter(Number.isFinite);
+      const nextCarriedBudgets = {
+        ...(transferSessionState.carriedBudgets || {}),
+        [player.owner]: Number.isFinite(Number((transferSessionState.carriedBudgets || {})[player.owner]))
+          ? Number((transferSessionState.carriedBudgets || {})[player.owner])
+          : Number(ownerParticipant.budget || 0),
+      };
+      const nextSession = {
+        ...transferSessionState,
+        participants: nextParticipants,
+        soldPlayerIds: nextSoldPlayerIds,
+        carriedBudgets: nextCarriedBudgets,
+        transferWindow: {
+          ...effectiveTransferWindow,
+          completedBy: nextCompletedBy,
+        },
+      };
+
+      await apiUpdateSession(transferSessionState.id, nextSession, user.token);
+      setTransferSessionState(nextSession);
+      setTransferActionMessage(currentlyListed ? "Player removed from transfer listings." : "Player added to transfer listings.");
+    } catch (err) {
+      setTransferActionMessage(err.message || "Could not update the transfer listings.");
+    } finally {
+      setTransferActionPlayerId("");
+    }
+  };
+
+  const renderInventoryRow = (player, index, { showOwner = true, showAction = false, showTransferPrice = false } = {}) => {
+    const td = getTierData(player.rating, tiers);
+    const ownerColor = player.ownerIdx >= 0 ? PCOLORS[player.ownerIdx % PCOLORS.length] : "#7f8ea6";
+    const canToggle = showAction
+      && player.owner === selectedName
+      && transferListingEditable;
+    const actionLabel = player.isTransferListed ? "REMOVE" : "PUT UP";
+
+    return React.createElement("div", {
+      key: `${player.owner || "pool"}-${player.id}-${index}`,
+      style: {
+        display: "grid",
+        gridTemplateColumns: showAction ? "34px 52px 60px minmax(0,1fr) 150px 64px auto" : "34px 52px 60px minmax(0,1fr) 150px 64px",
+        alignItems: "center",
+        gap: 12,
+        background: "#0a0f17",
+        borderRadius: 14,
+        padding: "10px 14px",
+        border: `1px solid ${player.isTransferListed ? "#FF6B3544" : `${td.border}33`}`,
+      }
+    },
+    React.createElement("span", { style: { fontFamily: "'Bebas Neue'", color: "#334155", fontSize: 14 } }, `#${index + 1}`),
+    React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: td.color } }, player.rating),
+    React.createElement("span", {
+      style: {
+        fontFamily: "'Rajdhani'",
+        fontSize: 11,
+        fontWeight: 700,
+        color: ownerColor,
+        background: `${ownerColor}18`,
+        borderRadius: 999,
+        textAlign: "center",
+        padding: "4px 0",
+      }
+    }, player.pos),
+    React.createElement("div", { style: { minWidth: 0 } },
+      React.createElement("div", { style: { fontFamily: "'Exo 2'", fontSize: 14, fontWeight: 600, color: "#e0e7f1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, player.name),
+      showTransferPrice && React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6", marginTop: 2 } }, `${player.transferPrice}M ${player.isTransferListed ? "transfer value" : "auction value"}`)
+    ),
+    showOwner
+      ? React.createElement("span", { style: { fontFamily: "'Exo 2'", fontSize: 12, color: ownerColor, fontWeight: 700 } }, player.owner || "UNPURCHASED")
+      : React.createElement("span", { style: { fontFamily: "'Exo 2'", fontSize: 12, color: "#7f8ea6", fontWeight: 700 } }, "UNPURCHASED"),
+    React.createElement("div", { style: { display: "flex", justifyContent: "flex-end" } },
+      React.createElement("span", {
+        style: {
+          fontFamily: "'Rajdhani'",
+          fontSize: 11,
+          color: player.isTransferListed ? "#FFB84D" : td.color,
+          background: player.isTransferListed ? "#FFB84D12" : td.bg,
+          border: `1px solid ${player.isTransferListed ? "#FFB84D33" : "transparent"}`,
+          borderRadius: 999,
+          textAlign: "center",
+          padding: "4px 10px",
+          minWidth: 54,
+        }
+      }, player.isTransferListed ? "LISTED" : getTierKey(player.rating, tiers))
+    ),
+    showAction && React.createElement("button", {
+      onClick: () => handleToggleTransferListing(player),
+      disabled: !canToggle || transferActionPlayerId === String(player.id),
+      style: {
+        background: player.isTransferListed ? "#2a1410" : "#0d1119",
+        color: player.isTransferListed ? "#FFB84D" : "#FF6B35",
+        border: `1px solid ${player.isTransferListed ? "#FFB84D44" : "#FF6B3544"}`,
+        borderRadius: 999,
+        padding: "7px 12px",
+        cursor: canToggle ? "pointer" : "default",
+        fontFamily: "'Bebas Neue'",
+        fontSize: 11,
+        letterSpacing: 1,
+        opacity: canToggle ? 1 : 0.45,
+      }
+    }, transferActionPlayerId === String(player.id) ? "UPDATING…" : actionLabel)
+    );
   };
 
   const surfaceCard = {
@@ -1053,7 +1315,7 @@ export function ResultsScreen({
               letterSpacing: 1,
               boxShadow: view === nextView ? "0 8px 24px rgba(79,195,247,.24)" : "none",
             }
-          }, nextView === "table" ? "TABLE" : nextView === "matches" ? "MATCHES" : nextView === "squads" ? "SQUADS" : nextView === "history" ? "ALL PICKS" : "BALLON D'OR")),
+          }, nextView === "table" ? "TABLE" : nextView === "matches" ? "MATCHES" : nextView === "squads" ? "SQUADS" : nextView === "history" ? "ALL PLAYERS" : "BALLON D'OR")),
         ),
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
           groupsEnabled && isHost && onStartTransferWindow && React.createElement("button", {
@@ -1295,7 +1557,7 @@ export function ResultsScreen({
                     React.createElement("div", { style: { textAlign: "right" } },
                       React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, savingFixtureId === fixture.id ? "Syncing…" : "Synced"),
                       React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end", marginTop: 10 } },
-                        played && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#FFD700", letterSpacing: 2 } }, Number(fixture.homeGoals) > Number(fixture.awayGoals) ? "HOME WIN" : Number(fixture.homeGoals) < Number(fixture.awayGoals) ? "AWAY WIN" : "DRAW"),
+                        played && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#FFD700", letterSpacing: 2 } }, Number(fixture.homeGoals) > Number(fixture.awayGoals) ? fixture.home : Number(fixture.homeGoals) < Number(fixture.awayGoals) ? fixture.away : "DRAW"),
                         canEditFixture && React.createElement("button", {
                           onClick: () => setSelectedUploadFixture({ ...fixture, groupLabel: section.groupLabel }),
                           style: {
@@ -1400,68 +1662,107 @@ export function ResultsScreen({
             style: { background: "#0d1119", color: "#fff", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 12px" },
           },
           React.createElement("option", { value: "ALL" }, "All owners"),
-          participants.map((participant) => React.createElement("option", { key: participant.name, value: participant.name }, participant.name))),
+          inventoryParticipants.map((participant) => React.createElement("option", { key: participant.name, value: participant.name }, participant.name))),
           React.createElement("select", {
             value: historyPosFilter,
             onChange: (e) => setHistoryPosFilter(e.target.value),
             style: { background: "#0d1119", color: "#fff", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 12px" },
           },
           React.createElement("option", { value: "ALL" }, "All positions"),
-          Array.from(new Set(allPicks.map((player) => player.pos))).sort().map((pos) => React.createElement("option", { key: pos, value: pos }, pos))),
+          Array.from(new Set([...purchasedPlayers, ...unpurchasedPlayers].map((player) => player.pos).filter(Boolean))).sort().map((pos) => React.createElement("option", { key: pos, value: pos }, pos))),
           React.createElement("select", {
             value: historyTierFilter,
             onChange: (e) => setHistoryTierFilter(e.target.value),
             style: { background: "#0d1119", color: "#fff", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 12px" },
           },
           React.createElement("option", { value: "ALL" }, "All tiers"),
-          Array.from(new Set(allPicks.map((player) => getTierKey(player.rating, tiers)))).sort().map((tier) => React.createElement("option", { key: tier, value: tier }, tier)))
+          Array.from(new Set([...purchasedPlayers, ...unpurchasedPlayers].map((player) => getTierKey(player.rating, tiers)))).sort().map((tier) => React.createElement("option", { key: tier, value: tier }, tier)))
         ),
-        filteredAllPicks.length === 0
-          ? React.createElement("div", { style: { ...surfaceCard, padding: 20, fontFamily: "'Rajdhani'", color: "#7f8ea6" } }, "No picks match the selected filters.")
-          : filteredAllPicks.slice().sort((a, b) => b.rating - a.rating).map((player, index) => {
-          const td = getTierData(player.rating, tiers);
-          return React.createElement("div", {
-            key: `${player.id}-${index}`,
+        React.createElement("div", { style: { ...surfaceCard, padding: 16, display: "grid", gap: 16 } },
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" } },
+            React.createElement("div", null,
+              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, "ALL PLAYERS"),
+              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 4 } }, "Purchased players, unpurchased pool, and live transfer listings in one place.")
+            ),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: transferListingEditable ? "#8fe7c0" : "#7f8ea6", maxWidth: 420, textAlign: "right" } },
+              transferSyncLoading
+                ? "Syncing transfer window…"
+                : transferListingEditable
+                  ? `Transfer window is live. List ${effectiveTransferWindow.requiredSalesMin || 2}-${effectiveTransferWindow.requiredSalesMax || 5} players from your own squad.`
+                  : transferWindowAlreadyOpened
+                    ? "Transfer listings are read-only here because the market is already open or closed."
+                    : "Open the mid-season transfer window to start listing players here."
+            )
+          ),
+          transferActionMessage && React.createElement("div", {
             style: {
-              display: "grid",
-              gridTemplateColumns: "34px 50px 60px 1fr 140px 58px",
-              alignItems: "center",
-              gap: 12,
+              fontFamily: "'Rajdhani'",
+              fontSize: 12,
+              color: transferActionMessage.toLowerCase().includes("could not") || transferActionMessage.toLowerCase().includes("at most") ? "#FFB84D" : "#8fe7c0",
+              background: transferActionMessage.toLowerCase().includes("could not") || transferActionMessage.toLowerCase().includes("at most") ? "#FFB84D12" : "#8fe7c012",
+              border: `1px solid ${transferActionMessage.toLowerCase().includes("could not") || transferActionMessage.toLowerCase().includes("at most") ? "#FFB84D33" : "rgba(143,231,192,.22)"}`,
+              borderRadius: 12,
+              padding: "10px 12px",
+            }
+          }, transferActionMessage),
+          [
+            {
+              key: "purchased",
+              title: "Purchased in auction",
+              subtitle: "Original auction buys. Owners can put up only their own players for transfer.",
+              rows: filteredPurchasedPlayers.slice().sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0)),
+              empty: "No purchased players match the selected filters.",
+              showOwner: true,
+              showAction: true,
+              showTransferPrice: true,
+            },
+            {
+              key: "unpurchased",
+              title: "Remaining unpurchased players",
+              subtitle: "Players left in the pool after the auction ended.",
+              rows: filteredUnpurchasedPlayers.slice().sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0)),
+              empty: "No unpurchased players match the selected filters.",
+              showOwner: false,
+              showAction: false,
+              showTransferPrice: true,
+            },
+            {
+              key: "listed",
+              title: "Players put up for transfer",
+              subtitle: "This section stays synced with the mid-season transfer window listings.",
+              rows: filteredTransferListedPlayers.slice().sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0)),
+              empty: "No transfer-listed players match the selected filters.",
+              showOwner: true,
+              showAction: false,
+              showTransferPrice: true,
+            },
+          ].map((section) => React.createElement("div", {
+            key: section.key,
+            style: {
               background: "#0a0f17",
-              borderRadius: 14,
-              padding: "10px 14px",
-              border: `1px solid ${td.border}33`,
-              animation: `rowIn .22s ease ${Math.min(index * 0.015, 0.5)}s both`,
+              border: "1px solid #1f2937",
+              borderRadius: 18,
+              padding: 16,
+              display: "grid",
+              gap: 12,
             }
           },
-          React.createElement("span", { style: { fontFamily: "'Bebas Neue'", color: "#334155", fontSize: 14 } }, `#${index + 1}`),
-          React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: td.color } }, player.rating),
-          React.createElement("span", {
-            style: {
-              fontFamily: "'Rajdhani'",
-              fontSize: 11,
-              fontWeight: 700,
-              color: PCOLORS[player.ownerIdx],
-              background: `${PCOLORS[player.ownerIdx]}18`,
-              borderRadius: 999,
-              textAlign: "center",
-              padding: "4px 0",
-            }
-          }, player.pos),
-          React.createElement("span", { style: { fontFamily: "'Exo 2'", fontSize: 14, fontWeight: 600, color: "#e0e7f1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, player.name),
-          React.createElement("span", { style: { fontFamily: "'Exo 2'", fontSize: 12, color: PCOLORS[player.ownerIdx], fontWeight: 700 } }, player.owner),
-          React.createElement("span", {
-            style: {
-              fontFamily: "'Rajdhani'",
-              fontSize: 11,
-              color: td.color,
-              background: td.bg,
-              borderRadius: 999,
-              textAlign: "center",
-              padding: "4px 0",
-            }
-          }, getTierKey(player.rating, tiers)));
-        })
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" } },
+            React.createElement("div", null,
+              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: section.key === "listed" ? "#FFB84D" : section.key === "unpurchased" ? "#4FC3F7" : "#FFD700", letterSpacing: 2 } }, section.title),
+              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 4 } }, section.subtitle)
+            ),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#aab6ca" } }, `${section.rows.length} players`)
+          ),
+          section.rows.length === 0
+            ? React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, section.empty)
+            : React.createElement("div", { style: { display: "grid", gap: 10 } }, section.rows.map((player, index) => renderInventoryRow(player, index, {
+                showOwner: section.showOwner,
+                showAction: section.showAction,
+                showTransferPrice: section.showTransferPrice,
+              })))
+          ))
+        )
       ),
       view === "awards" && React.createElement(BallonDorPanel, {
         auctionResultId,

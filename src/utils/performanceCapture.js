@@ -688,6 +688,7 @@ export function buildBallonDorRanking(submissions = []) {
         ratingSamples: 0,
         goals: 0,
         assists: 0,
+        hatTrickCount: 0,
         playerOfTheMatchCount: 0,
         teams: new Set(),
         fixtures: new Set(),
@@ -697,6 +698,7 @@ export function buildBallonDorRanking(submissions = []) {
       existing.ratingSamples += Number.isFinite(rating) ? 1 : 0;
       existing.goals += Number.isFinite(goals) ? goals : 0;
       existing.assists += Number.isFinite(assists) ? assists : 0;
+      existing.hatTrickCount += Number.isFinite(goals) && goals >= 3 ? Math.floor(goals / 3) : 0;
       existing.playerOfTheMatchCount += isPlayerOfTheMatch ? 1 : 0;
       if (submission?.mappedParticipantName) existing.teams.add(submission.mappedParticipantName);
       if (submission?.fixtureLabel) existing.fixtures.add(submission.fixtureLabel);
@@ -708,13 +710,14 @@ export function buildBallonDorRanking(submissions = []) {
   return Array.from(byPlayer.values())
     .map((entry) => {
       const averageRating = entry.ratingSamples > 0 ? Number((entry.totalRating / entry.ratingSamples).toFixed(2)) : 0;
-      const ballonDorScore = Number((averageRating * 10 + entry.goals * 6 + entry.assists * 4 + entry.playerOfTheMatchCount * 8).toFixed(2));
+      const ballonDorScore = Number(((averageRating / 10) + entry.goals + (entry.assists * 0.75) + entry.hatTrickCount).toFixed(2));
       return {
         playerName: entry.playerName,
         averageRating,
         goals: entry.goals,
         assists: entry.assists,
         playerOfTheMatchCount: entry.playerOfTheMatchCount,
+        hatTrickCount: entry.hatTrickCount,
         submissions: entry.fixtures.size,
         teams: Array.from(entry.teams),
         ballonDorScore,
