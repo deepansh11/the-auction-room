@@ -753,6 +753,7 @@ export function ResultsScreen({
   const [historyOwnerFilter, setHistoryOwnerFilter] = React.useState("ALL");
   const [historyPosFilter, setHistoryPosFilter] = React.useState("ALL");
   const [historyTierFilter, setHistoryTierFilter] = React.useState("ALL");
+  const [historySectionFilter, setHistorySectionFilter] = React.useState("ALL");
   const [matchTeamFilter, setMatchTeamFilter] = React.useState("ALL");
   const [matchLegFilter, setMatchLegFilter] = React.useState("ALL");
   const [fixturesState, setFixturesState] = React.useState(() => {
@@ -1195,9 +1196,8 @@ export function ResultsScreen({
   const renderInventoryRow = (player, index, { showOwner = true, showAction = false, showTransferPrice = false } = {}) => {
     const td = getTierData(player.rating, tiers);
     const ownerColor = player.ownerIdx >= 0 ? PCOLORS[player.ownerIdx % PCOLORS.length] : "#7f8ea6";
-    const canToggle = showAction
-      && player.owner === selectedName
-      && transferListingEditable;
+    const isOwnedByViewer = player.owner === selectedName;
+    const canToggle = showAction && isOwnedByViewer && transferListingEditable;
     const actionLabel = player.isTransferListed ? "REMOVE" : "PUT UP";
 
     return React.createElement("div", {
@@ -1249,22 +1249,36 @@ export function ResultsScreen({
         }
       }, player.isTransferListed ? "LISTED" : getTierKey(player.rating, tiers))
     ),
-    showAction && React.createElement("button", {
-      onClick: () => handleToggleTransferListing(player),
-      disabled: !canToggle || transferActionPlayerId === String(player.id),
-      style: {
-        background: player.isTransferListed ? "#2a1410" : "#0d1119",
-        color: player.isTransferListed ? "#FFB84D" : "#FF6B35",
-        border: `1px solid ${player.isTransferListed ? "#FFB84D44" : "#FF6B3544"}`,
-        borderRadius: 999,
-        padding: "7px 12px",
-        cursor: canToggle ? "pointer" : "default",
-        fontFamily: "'Bebas Neue'",
-        fontSize: 11,
-        letterSpacing: 1,
-        opacity: canToggle ? 1 : 0.45,
-      }
-    }, transferActionPlayerId === String(player.id) ? "UPDATING…" : actionLabel)
+    showAction && (isOwnedByViewer
+      ? React.createElement("button", {
+          onClick: () => handleToggleTransferListing(player),
+          disabled: !canToggle || transferActionPlayerId === String(player.id),
+          style: {
+            background: player.isTransferListed ? "#2a1410" : "#0d1119",
+            color: player.isTransferListed ? "#FFB84D" : "#FF6B35",
+            border: `1px solid ${player.isTransferListed ? "#FFB84D44" : "#FF6B3544"}`,
+            borderRadius: 999,
+            padding: "7px 12px",
+            cursor: canToggle ? "pointer" : "default",
+            fontFamily: "'Bebas Neue'",
+            fontSize: 11,
+            letterSpacing: 1,
+            opacity: canToggle ? 1 : 0.45,
+          }
+        }, transferActionPlayerId === String(player.id) ? "UPDATING…" : actionLabel)
+      : React.createElement("span", {
+          style: {
+            fontFamily: "'Rajdhani'",
+            fontSize: 10,
+            fontWeight: 700,
+            color: "#7f8ea6",
+            background: "#0d1119",
+            border: "1px solid #1f2937",
+            borderRadius: 999,
+            padding: "6px 10px",
+            letterSpacing: 1,
+          }
+        }, "OWNER ONLY"))
     );
   };
 
@@ -1748,6 +1762,28 @@ export function ResultsScreen({
             React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba" } }, "Visible with current filters")
             ))
           ),
+          React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+            [
+              { key: "ALL", label: "SHOW ALL", tone: "#94a3b8" },
+              { key: "purchased", label: "PURCHASED", tone: "#FFD700" },
+              { key: "unpurchased", label: "UNPURCHASED", tone: "#4FC3F7" },
+              { key: "listed", label: "TRANSFER LIST", tone: "#FFB84D" },
+            ].map((item) => React.createElement("button", {
+              key: item.key,
+              onClick: () => setHistorySectionFilter(item.key),
+              style: {
+                background: historySectionFilter === item.key ? `${item.tone}20` : "#0d1119",
+                color: historySectionFilter === item.key ? item.tone : "#aab6ca",
+                border: `1px solid ${historySectionFilter === item.key ? `${item.tone}55` : "#1f2937"}`,
+                borderRadius: 999,
+                padding: "8px 14px",
+                cursor: "pointer",
+                fontFamily: "'Bebas Neue'",
+                fontSize: 12,
+                letterSpacing: 1,
+              }
+            }, item.label))
+          ),
           transferActionMessage && React.createElement("div", {
             style: {
               fontFamily: "'Rajdhani'",
@@ -1764,7 +1800,11 @@ export function ResultsScreen({
               key: "purchased",
               title: "Purchased in auction",
               subtitle: "Original auction buys. Owners can put up only their own players for transfer.",
-              rows: filteredPurchasedPlayers.slice().sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0)),
+              rows: filteredPurchasedPlayers.slice().sort((a, b) => {
+                const ownerBias = Number(b.owner === selectedName) - Number(a.owner === selectedName);
+                if (ownerBias !== 0) return ownerBias;
+                return Number(b.rating || 0) - Number(a.rating || 0);
+              }),
               empty: "No purchased players match the selected filters.",
               showOwner: true,
               showAction: true,
@@ -1790,7 +1830,7 @@ export function ResultsScreen({
               showAction: false,
               showTransferPrice: true,
             },
-          ].map((section) => React.createElement("div", {
+          ].filter((section) => historySectionFilter === "ALL" || historySectionFilter === section.key).map((section) => React.createElement("div", {
             key: section.key,
             style: {
               background: "#0a0f17",
