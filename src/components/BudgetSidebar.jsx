@@ -1,5 +1,6 @@
 import React from "react";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData } from "../game/constants.js";
+import { TeamBadge, getParticipantAccent, StatusPill } from "../theme/footballTheme.js";
 
 export function BudgetSidebar({ participants, currentTurn, passedSet, onAnalyse, lotIdx, totalLots, tiers=TIERS }) {
   return React.createElement("div", {
@@ -22,21 +23,20 @@ export function BudgetSidebar({ participants, currentTurn, passedSet, onAnalyse,
 
       return React.createElement("div", { key:i, style:{
         background:"#0d0f16", borderRadius:9, padding:"9px 11px",
-        border:`1px solid ${isPicking ? PCOLORS[i]+"66" : hasPassed ? "#0f1015" : "#1a1c22"}`,
+        border:`1px solid ${isPicking ? getParticipantAccent(i)+"66" : hasPassed ? "#0f1015" : "#1a1c22"}`,
         opacity: hasPassed ? .5 : 1,
-        boxShadow: isPicking ? `0 0 14px ${PCOLORS[i]}22` : "none",
+        boxShadow: isPicking ? `0 0 14px ${getParticipantAccent(i)}22` : "none",
         transition:"all .3s",
       }},
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 } },
           React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
-            React.createElement("div", { style:{ width:7, height:7, borderRadius:"50%", background:PCOLORS[i],
-              boxShadow: isPicking ? `0 0 8px ${PCOLORS[i]}` : "none" } }),
+            React.createElement(TeamBadge, { name: p.name, color: getParticipantAccent(i), size: 22, subtle: true }),
             React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:12, fontWeight:700,
-              color: isPicking ? PCOLORS[i] : "#ccc" } }, p.name)
+              color: isPicking ? getParticipantAccent(i) : "#ccc" } }, p.name)
           ),
           React.createElement("div", { style:{ display:"flex", gap:5, alignItems:"center" } },
-            hasPassed && React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#FF3D71", fontWeight:700 } }, "DONE"),
-            isPicking && React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#00FF88", fontWeight:700, animation:"pulse 1s ease infinite" } }, "●"),
+            hasPassed && React.createElement(StatusPill, { tone: "red" }, "DONE"),
+            isPicking && React.createElement(StatusPill, { tone: "green" }, "LIVE"),
             React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:barCol } }, `${p.budget}M`)
           )
         ),

@@ -1,6 +1,7 @@
 import React from "react";
 import { sfx } from "../utils/sfx.js";
 import { getTierData, getTierKey, TIERS, POS_GROUPS, getPosGroup } from "../game/constants.js";
+import { StatusPill } from "../theme/footballTheme.js";
 
 function numOrDash(value) {
   return Number.isFinite(value) ? value : "--";
@@ -72,7 +73,23 @@ function getStatPairs(player) {
   ];
 }
 
-export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAfford, isWishlist, onWishlist, tiers=TIERS, animDelay=0, wishlists=[], participants=[], currentUserName="" }) {
+export function PlayerRow({
+  player,
+  onPick,
+  owned,
+  sold = false,
+  unavailableLabel = "",
+  ownerName,
+  ownerColor,
+  cantAfford,
+  isWishlist,
+  onWishlist,
+  tiers=TIERS,
+  animDelay=0,
+  wishlists=[],
+  participants=[],
+  currentUserName="",
+}) {
   const [faceFailed, setFaceFailed] = React.useState(false);
   const td = getTierData(player.rating, tiers);
   const tk = getTierKey(player.rating, tiers);
@@ -83,6 +100,9 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
   // Check if this player is in my squad
   const inMySquad = participants?.find(p => p.name === currentUserName)?.squad?.some(s => s.id === player.id) ?? false;
 
+  const unavailable = owned || sold;
+  const unavailableText = sold ? (unavailableLabel || "SOLD") : `✓ ${ownerName}`;
+
   return React.createElement("div", {
     style: {
       display: "grid",
@@ -92,9 +112,9 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
       padding: "8px 10px",
       borderRadius: 9,
       marginBottom: 4,
-      background: owned ? "#08090d" : "#0d0f16",
-      border: `1px solid ${owned ? "#111318" : cantAfford ? "#111" : td.border}`,
-      opacity: owned ? 0.45 : cantAfford ? 0.5 : 1,
+      background: unavailable ? "#08090d" : "#0d0f16",
+      border: `1px solid ${unavailable ? "#111318" : cantAfford ? "#111" : td.border}`,
+      opacity: unavailable ? 0.45 : cantAfford ? 0.5 : 1,
       animation: `rowIn .22s ease ${animDelay}s both`,
     }
   },
@@ -167,7 +187,7 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
         fontFamily: "'Exo 2'",
         fontSize: 13,
         fontWeight: 600,
-        color: owned ? "#535b69" : "#dde3ee",
+        color: unavailable ? "#535b69" : "#dde3ee",
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -201,7 +221,7 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
 
     React.createElement("div", { style: { textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 } },
       React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
-        inMySquad && React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 9, color: "#00FF88", fontWeight: 700, background: "#00FF8822", borderRadius: 3, padding: "2px 4px" } }, "IN MY SQUAD"),
+      inMySquad && React.createElement(StatusPill, { tone: "green" }, "IN MY SQUAD"),
         React.createElement("button", {
           onClick: () => { sfx("wishlist"); onWishlist(player.id); },
           style: {
@@ -215,8 +235,8 @@ export function PlayerRow({ player, onPick, owned, ownerName, ownerColor, cantAf
           }
         }, isWishlist ? "❤️" : "🤍")
       ),
-      owned
-        ? React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: ownerColor, fontWeight: 700 } }, `✓ ${ownerName}`)
+      unavailable
+        ? React.createElement(StatusPill, { tone: sold ? "orange" : "cyan" }, unavailableText)
         : cantAfford
           ? React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: "#666" } }, "can't afford")
           : onPick

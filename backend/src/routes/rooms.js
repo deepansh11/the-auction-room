@@ -4,6 +4,8 @@ import { requireUserAuth } from "../middleware/userAuth.js";
 import { normalizeFirebaseError } from "../services/firebaseErrors.js";
 import { getFirebase } from "../services/firebaseService.js";
 import { persistCompletedSessionResult } from "../services/sessionPersistence.js";
+import { enrichPlayersWithCatalog, getPlayersByIds } from "../services/playerCatalog.js";
+import { buildSessionBackupPayload, normalizeAuctionResultDocument, normalizeSessionDocument } from "../services/sessionState.js";
 import { emitSessionClosed, emitSessionUpdate } from "../services/realtime.js";
 import { rerollMysteryCandidates } from "../services/mysteryCard.js";
 import { generateAuctionSetup } from "../services/gameSetup.js";
@@ -23,7 +25,7 @@ const tierSchema = z.object({
 });
 
 // What the host's browser is allowed to hand over when creating a room: which players and
-// options to use. Everything secret (lot assignment, draw order, pick order, Mystery Card
+// options to use. Everything secret (lot assignment, pick order, Mystery Card
 // pools/candidates, groups/fixtures) is generated server-side from this spec — the host never
 // computes or sees any of it themselves, same as every other participant.
 const roomSpecSchema = z.object({
@@ -62,14 +64,35 @@ function removeFromSequence(sequence, name) {
     : sequence;
 }
 
+function reconcileParticipantNames(session) {
+  const normalizedSession = normalizeSessionDocument(session);
+  const participantList = Array.isArray(normalizedSession?.participants) ? normalizedSession.participants : [];
+  const activeNames = participantList
+    .map((participant) => String(participant?.name || "").trim())
+    .filter(Boolean);
+  const existingOrder = Array.isArray(normalizedSession?.participantNames)
+    ? normalizedSession.participantNames.map((name) => String(name || "").trim()).filter(Boolean)
+    : [];
+
+  if (existingOrder.length === 0) {
+    return activeNames;
+  }
+
+  const activeNameSet = new Set(activeNames);
+  const nextOrder = existingOrder.filter((name) => activeNameSet.has(name));
+  activeNames.forEach((name) => {
+    if (!nextOrder.includes(name)) {
+      nextOrder.push(name);
+    }
+  });
+  return nextOrder;
+}
+
 function withParticipantNames(session) {
+  const normalizedSession = normalizeSessionDocument(session);
   return {
-    ...session,
-    participantNames: Array.isArray(session?.participants)
-      ? session.participants
-          .map((p) => String(p?.name || "").trim())
-          .filter(Boolean)
-      : [],
+    ...normalizedSession,
+    participantNames: reconcileParticipantNames(normalizedSession),
     updatedAt: Date.now(),
   };
 }
@@ -139,6 +162,49 @@ function sanitizePlayerList(players, { includeName = false } = {}) {
     .filter((player) => Number.isFinite(player.id));
 }
 
+function getTransferSalePrice(player, tiers) {
+  const explicitPrice = Number(player?.purchasePrice);
+  if (Number.isFinite(explicitPrice)) return explicitPrice;
+  const rating = Number(player?.rating);
+  const fallbackTier = Object.values(tiers || {}).find((tier) => rating >= tier.min && rating <= tier.max);
+  return Number(fallbackTier?.price || 0);
+}
+
+function getParticipantPlayerIds(participants) {
+  return new Set(
+    (Array.isArray(participants) ? participants : [])
+      .flatMap((participant) => Array.isArray(participant?.squad) ? participant.squad : [])
+      .map((player) => Number(player?.id))
+      .filter(Number.isFinite)
+  );
+}
+
+async function buildTransferAuctionPool(sourceResult, transferSession) {
+  const normalizedSource = normalizeAuctionResultDocument(sourceResult || {});
+  const sourceBoughtIds = getParticipantPlayerIds(normalizedSource.participants);
+  const sourcePlayerIds = (Array.isArray(normalizedSource.playerPool) ? normalizedSource.playerPool : [])
+    .map((player) => Number(player?.id))
+    .filter((id) => Number.isFinite(id) && !sourceBoughtIds.has(id));
+  const unsoldCarryPlayers = await getPlayersByIds(sourcePlayerIds);
+
+  const listedPlayers = (Array.isArray(transferSession?.participants) ? transferSession.participants : [])
+    .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : []);
+  const enrichedListedPlayers = await enrichPlayersWithCatalog(listedPlayers);
+
+  const byId = new Map();
+  unsoldCarryPlayers.forEach((player) => {
+    byId.set(Number(player.id), player);
+  });
+  enrichedListedPlayers.forEach((player) => {
+    const id = Number(player?.id);
+    if (Number.isFinite(id)) {
+      byId.set(id, player);
+    }
+  });
+
+  return Array.from(byId.values());
+}
+
 async function cleanupLiveSession(db, session) {
   if (!session?.id) return;
   const batch = db.batch();
@@ -161,7 +227,7 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
     const groupCount = Math.max(1, Math.floor(Number(spec.groupCount) || 1));
 
     // Every random/secret piece of the auction is generated here, server-side, from the spec —
-    // the host's browser never computes (and is never shown) the lot assignment, draw order,
+    // the host's browser never computes (and is never shown) the lot assignment,
     // pick sequence, or Mystery Card pools/candidates. They receive exactly the same
     // zero-information "draw phase" view as everyone else once this is stored.
     const fixtureLeg = spec.fixtureLeg === "single" ? "single" : "double";
@@ -179,13 +245,13 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
 
     const { db } = getFirebase();
     const now = Date.now();
-    const session = {
+    const session = normalizeSessionDocument({
       id: spec.id,
       name: spec.name,
       host,
       roomCode,
       budgetPerBidder: spec.budgetPerBidder,
-      participants: setup.sequence.map((n) => ({ name: n, budget: spec.budgetPerBidder, squad: [] })),
+      participants: spec.participantNames.map((name) => ({ name, budget: spec.budgetPerBidder, squad: [] })),
       lotOrder: setup.lotOrder,
       sequence: setup.sequence,
       // Store only player IDs/lot/name, not full stat objects (those are hydrated client-side
@@ -198,8 +264,8 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
       lotClosing: false,
       passedThisLot: [],
       turnIdx: 0,
-      drawPhase: 0,
-      revealedLotCount: 0,
+      drawPhase: 1,
+      revealedLotCount: setup.lotOrder.length,
       revealedPickCount: 0,
       mysteryEnabled: Boolean(spec.mysteryEnabled),
       mysteryPools: setup.mysteryPools,
@@ -211,11 +277,11 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
       knockoutFormat,
       groups: setup.groups,
       fixtures: setup.fixtures,
-      participantNames: setup.sequence.slice(),
+      participantNames: spec.participantNames.slice(),
       status: "draw",
       createdAt: now,
       updatedAt: now,
-    };
+    });
 
     // Check document size before storing
     const docSize = JSON.stringify(session).length;
@@ -285,7 +351,7 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
       return res.status(404).json({ error: "Session not found" });
     }
 
-    const session = sessionSnap.data();
+    const session = normalizeSessionDocument(sessionSnap.data());
     const participants = Array.isArray(session.participants) ? [...session.participants] : [];
     const baseBudget = Number(session?.budgetPerBidder || 0);
 
@@ -377,6 +443,7 @@ router.get("/sessions", requireUserAuth, async (req, res) => {
     byParticipantSnap.docs.forEach((d) => map.set(d.id, d.data()));
 
     const sessions = Array.from(map.values())
+      .map((session) => normalizeSessionDocument(session))
       .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
       .map((s) => sanitizeSessionForViewer(s, username));
     return res.json({ sessions });
@@ -392,7 +459,7 @@ router.get("/sessions/:id", requireUserAuth, async (req, res) => {
     const snap = await db.collection("sessions").doc(String(req.params.id)).get();
     if (!snap.exists) return res.status(404).json({ error: "Session not found" });
 
-    const session = snap.data();
+    const session = normalizeSessionDocument(snap.data());
     const username = String(req.user?.username || "").trim();
     if (!isSessionParticipant(session, username)) {
       return res.status(403).json({ error: "You are not part of this session" });
@@ -401,6 +468,209 @@ router.get("/sessions/:id", requireUserAuth, async (req, res) => {
     return res.json({ session: sanitizeSessionForViewer(session, username) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to fetch session", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
+router.get("/sessions/:id/backup", requireUserAuth, async (req, res) => {
+  try {
+    const { db } = getFirebase();
+    const snap = await db.collection("sessions").doc(String(req.params.id)).get();
+    if (!snap.exists) return res.status(404).json({ error: "Session not found" });
+
+    const session = normalizeSessionDocument(snap.data());
+    const username = String(req.user?.username || "").trim();
+    if (!username || session.host !== username) {
+      return res.status(403).json({ error: "Only the host can export a full session backup" });
+    }
+
+    return res.json(buildSessionBackupPayload(session));
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to export session backup", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
+router.post("/sessions/restore", requireUserAuth, async (req, res) => {
+  try {
+    const backup = req.body?.backup;
+    if (!backup || typeof backup !== "object") {
+      return res.status(400).json({ error: "backup payload is required" });
+    }
+    if (backup.type !== "fc-bidding-room-session-backup") {
+      return res.status(400).json({ error: "Invalid backup type" });
+    }
+    if (!backup.session || typeof backup.session !== "object") {
+      return res.status(400).json({ error: "Backup session payload is required" });
+    }
+
+    const username = String(req.user?.username || "").trim();
+    const restored = normalizeSessionDocument(backup.session);
+    if (!restored.id || !restored.roomCode) {
+      return res.status(400).json({ error: "Backup is missing session identity" });
+    }
+    if (!username || String(restored.host || "").toLowerCase() !== username.toLowerCase()) {
+      return res.status(403).json({ error: "Only the original host can restore this backup" });
+    }
+    if (!["draw", "active", "transfer"].includes(String(restored.status || ""))) {
+      return res.status(409).json({ error: "Only live auction backups can be restored" });
+    }
+
+    const roomCode = String(restored.roomCode || "").toUpperCase();
+    const { db } = getFirebase();
+    const roomRef = db.collection("rooms").doc(roomCode);
+    const roomSnap = await roomRef.get();
+    if (roomSnap.exists) {
+      const linkedSessionId = String(roomSnap.data()?.sessionId || "");
+      if (linkedSessionId && linkedSessionId !== String(restored.id)) {
+        const linkedSnap = await db.collection("sessions").doc(linkedSessionId).get();
+        if (linkedSnap.exists) {
+          return res.status(409).json({ error: `Room code ${roomCode} is already attached to another live session` });
+        }
+      }
+    }
+
+    const restoredSession = withParticipantNames({
+      ...restored,
+      host: username,
+      roomCode,
+      updatedAt: Date.now(),
+    });
+
+    const batch = db.batch();
+    batch.set(db.collection("sessions").doc(String(restoredSession.id)), restoredSession, { merge: true });
+    batch.set(roomRef, {
+      sessionId: String(restoredSession.id),
+      roomCode,
+      updatedAt: Date.now(),
+    }, { merge: true });
+    await batch.commit();
+
+    emitSessionUpdate(restoredSession);
+    return res.status(201).json({ session: sanitizeSessionForViewer(restoredSession, username) });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to restore session backup", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
+router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, res) => {
+  try {
+    const { db } = getFirebase();
+    const sessionRef = db.collection("sessions").doc(String(req.params.id));
+    const snap = await sessionRef.get();
+    if (!snap.exists) return res.status(404).json({ error: "Session not found" });
+
+    const session = normalizeSessionDocument(snap.data());
+    const username = String(req.user?.username || "").trim();
+    if (!username || session.host !== username) {
+      return res.status(403).json({ error: "Only the host can open the transfer market" });
+    }
+    if (session.status !== "transfer" || session.transferWindow?.phase !== "selling") {
+      return res.status(409).json({ error: "Transfer market can only open from the selling phase" });
+    }
+
+    const participants = Array.isArray(session.participants) ? session.participants : [];
+    const requiredSalesMin = Number(session.transferWindow?.requiredSalesMin || 2);
+    const requiredSalesMax = Number(session.transferWindow?.requiredSalesMax || 5);
+
+    for (const participant of participants) {
+      const soldPlayers = Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [];
+      if (soldPlayers.length < requiredSalesMin || soldPlayers.length > requiredSalesMax) {
+        return res.status(409).json({ error: `${participant.name} must sell between ${requiredSalesMin} and ${requiredSalesMax} players before the market opens` });
+      }
+    }
+
+    const sourceResultId = String(session.transferWindow?.sourceResultId || session.transferWindow?.sourceSessionId || "");
+    if (!sourceResultId) {
+      return res.status(409).json({ error: "Original auction result is missing for this transfer session" });
+    }
+
+    const sourceResultSnap = await db.collection("auctionResults").doc(sourceResultId).get();
+    if (!sourceResultSnap.exists) {
+      return res.status(404).json({ error: "Original auction result not found" });
+    }
+
+    const sourceResult = normalizeAuctionResultDocument(sourceResultSnap.data());
+    const transferPlayerPool = await buildTransferAuctionPool(sourceResult, session);
+    if (transferPlayerPool.length === 0) {
+      return res.status(409).json({ error: "No eligible players available for the transfer market" });
+    }
+
+    const setup = generateAuctionSetup({
+      selectedPlayers: transferPlayerPool,
+      tiers: session.tiers,
+      participantNames: Array.isArray(session.participantNames) && session.participantNames.length > 0
+        ? session.participantNames
+        : participants.map((participant) => participant.name),
+      mysteryEnabled: Boolean(session.mysteryEnabled),
+      groupsEnabled: false,
+      groupCount: 1,
+      fixtureLeg: "single",
+    });
+
+    const carriedBudgets = {};
+    participants.forEach((participant) => {
+      const baseBudget = Number(session.carriedBudgets?.[participant.name] ?? participant.budget ?? 0);
+      const saleProceeds = (Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : []).reduce(
+        (sum, player) => sum + getTransferSalePrice(player, session.tiers),
+        0
+      );
+      carriedBudgets[participant.name] = baseBudget + saleProceeds;
+    });
+
+    const nextParticipants = participants.map((participant) => ({
+      ...participant,
+      budget: carriedBudgets[participant.name],
+    }));
+
+    const nextSession = normalizeSessionDocument({
+      ...session,
+      participants: nextParticipants,
+      participantNames: reconcileParticipantNames({
+        ...session,
+        participants: nextParticipants,
+      }),
+      lotOrder: setup.lotOrder,
+      sequence: setup.sequence,
+      playerPool: sanitizePlayerList(setup.playerPool, { includeName: true }),
+      shuffledPlayers: sanitizePlayerList(setup.shuffledPlayers, { includeName: true }),
+      mysteryPools: setup.mysteryPools,
+      mysteryCurrent: setup.mysteryCurrent,
+      mysteryUsed: {},
+      groupsEnabled: false,
+      groupCount: 0,
+      groups: {},
+      fixtures: {},
+      lotIdx: 0,
+      turnIdx: 0,
+      passedThisLot: [],
+      lotOpen: false,
+      lotClosing: false,
+      drawPhase: 0,
+      revealedLotCount: setup.lotOrder.length,
+      revealedPickCount: 0,
+      soldPlayerIds: participants
+        .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
+        .map((player) => Number(player?.id))
+        .filter(Number.isFinite),
+      carriedBudgets,
+      transferWindow: {
+        ...session.transferWindow,
+        phase: "market-open",
+        completedBy: nextParticipants.map((participant) => participant.name),
+        closedAt: Date.now(),
+        unsoldCarryCount: Number(session.transferWindow?.unsoldCarryCount) || 0,
+      },
+      status: "active",
+      updatedAt: Date.now(),
+    });
+
+    await sessionRef.set(nextSession, { merge: true });
+    emitSessionUpdate(nextSession);
+    return res.json({ session: sanitizeSessionForViewer(nextSession, username) });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to open transfer market", 500);
     return res.status(normalized.status).json({ error: normalized.error });
   }
 });
@@ -415,7 +685,7 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
     const existingSnap = await sessionRef.get();
     if (!existingSnap.exists) return res.status(404).json({ error: "Session not found" });
 
-    const existing = existingSnap.data();
+    const existing = normalizeSessionDocument(existingSnap.data());
     const username = String(req.user?.username || "").trim();
     if (!isSessionParticipant(existing, username)) {
       return res.status(403).json({ error: "You are not part of this session" });
@@ -464,25 +734,17 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
     // whole game, so no client input for it is ever trusted, at any status.
     const lotOrder = existing.lotOrder || [];
 
-    // sequence (pick/turn order) is different: during the draw ceremony it's the same kind of
-    // secret as lotOrder (must not be readable before its reveal step), but once bidding is
-    // active it becomes legitimate, client-driven gameplay state (rotated every lot). So it's
-    // only locked to the server's stored copy while still in the draw phase.
+    // sequence (pick/turn order) stays hidden during the draw screen, but once bidding is active
+    // it becomes legitimate, client-driven gameplay state (rotated every lot). So it's only
+    // locked to the server's stored copy while still in the draw phase.
     const sequence = mergedStatus === "draw"
       ? (existing.sequence || [])
       : (Array.isArray(session.sequence) ? session.sequence : (existing.sequence || []));
 
-    // The draw ceremony reveals one extra lot/pick at a time for suspense — clamp both counters
-    // so a crafted request can't jump straight to "everything revealed" instead of stepping
-    // through it, which would otherwise hand back the *entire* secret array in one response.
+    // The draw screen now only reveals the pick sequence step-by-step. Lot order is fixed
+    // sequentially, so keep it fully revealed while still clamping pick-order progress.
     const totalToReveal = (Array.isArray(existing.participants) ? existing.participants.length : 0)
       || lotOrder.length;
-    const existingRevealedLotCount = Number(existing.revealedLotCount || 0);
-    const revealedLotCount = Math.max(0, Math.min(
-      Number(session.revealedLotCount ?? existingRevealedLotCount) || 0,
-      existingRevealedLotCount + 1,
-      totalToReveal
-    ));
     const existingRevealedPickCount = Number(existing.revealedPickCount || 0);
     const revealedPickCount = Math.max(0, Math.min(
       Number(session.revealedPickCount ?? existingRevealedPickCount) || 0,
@@ -490,7 +752,7 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
       totalToReveal
     ));
 
-    const optimizedSession = {
+    const optimizedSession = normalizeSessionDocument({
       ...existing,
       ...session,
       id: existing.id,
@@ -499,19 +761,21 @@ router.put("/sessions/:id", requireUserAuth, async (req, res) => {
       shuffledPlayers: existing.shuffledPlayers || [],
       lotOrder,
       sequence,
-      revealedLotCount,
+      revealedLotCount: lotOrder.length,
       revealedPickCount,
       mysteryEnabled: Boolean(existing.mysteryEnabled),
       mysteryPools: existing.mysteryPools || {},
       mysteryUsed: mergedMysteryUsed,
       mysteryCurrent,
       participantNames: Array.isArray(session?.participants)
-        ? session.participants
-            .map((p) => String(p?.name || "").trim())
-            .filter(Boolean)
+        ? reconcileParticipantNames({
+            ...existing,
+            participantNames: existing.participantNames || [],
+            participants: session.participants,
+          })
         : (existing.participantNames || []),
       updatedAt: Date.now(),
-    };
+    });
 
     if (optimizedSession.status === "complete") {
       await persistCompletedSessionResult(db, optimizedSession);
@@ -551,7 +815,7 @@ router.post("/rooms/:roomCode/readmit", requireUserAuth, async (req, res) => {
     const sessionSnap = await sessionRef.get();
     if (!sessionSnap.exists) return res.status(404).json({ error: "Session not found" });
 
-    const session = sessionSnap.data();
+    const session = normalizeSessionDocument(sessionSnap.data());
     if (session.host !== hostUsername) {
       return res.status(403).json({ error: "Only the host can readmit players" });
     }
@@ -595,7 +859,7 @@ router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
     const snap = await sessionRef.get();
     if (!snap.exists) return res.status(404).json({ error: "Session not found" });
 
-    const session = snap.data();
+    const session = normalizeSessionDocument(snap.data());
     const username = String(req.user?.username || "").trim();
     if (!username) return res.status(400).json({ error: "Invalid user" });
 

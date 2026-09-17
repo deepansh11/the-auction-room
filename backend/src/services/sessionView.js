@@ -14,8 +14,9 @@
  * that the given session currently allows anyone to see the contents of.
  */
 export function getVisibleLotSet(session) {
-  const lotOrder = Array.isArray(session?.lotOrder) ? session.lotOrder : [];
-  const status = session?.status;
+  const normalizedSession = normalizeSessionDocument(session);
+  const lotOrder = Array.isArray(normalizedSession?.lotOrder) ? normalizedSession.lotOrder : [];
+  const status = normalizedSession?.status;
 
   // Once an auction is finished (or cancelled) there is nothing left to hide.
   if (status === "complete" || status === "cancelled") {
@@ -27,10 +28,10 @@ export function getVisibleLotSet(session) {
     return new Set();
   }
 
-  const lotIdx = Number(session?.lotIdx || 0);
+  const lotIdx = Number(normalizedSession?.lotIdx || 0);
   const visible = lotOrder.slice(0, Math.max(0, lotIdx)); // lots already fully completed
   const currentLotNum = lotOrder[lotIdx];
-  const currentLotRevealed = Boolean(session?.lotOpen || session?.lotClosing);
+  const currentLotRevealed = Boolean(normalizedSession?.lotOpen || normalizedSession?.lotClosing);
 
   if (currentLotRevealed && currentLotNum != null) {
     visible.push(currentLotNum);
@@ -45,26 +46,20 @@ function filterPlayersByVisibleLots(players, visibleLotSet) {
 }
 
 /**
- * The draw ceremony's entire purpose is a progressive reveal of `lotOrder` (draw order) and
- * `sequence` (pick order) — so, just like unopened lots, the *undrawn* portion of these two
- * arrays must never reach any client, including the host who created them.
+ * During the draw screen only the pick sequence stays hidden. Lot order is fixed sequentially,
+ * so it can be sent in full even before bidding starts.
  */
 export function getRevealedDrawState(session) {
-  const lotOrder = Array.isArray(session?.lotOrder) ? session.lotOrder : [];
-  const sequence = Array.isArray(session?.sequence) ? session.sequence : [];
+  const normalizedSession = normalizeSessionDocument(session);
+  const lotOrder = Array.isArray(normalizedSession?.lotOrder) ? normalizedSession.lotOrder : [];
+  const sequence = Array.isArray(normalizedSession?.sequence) ? normalizedSession.sequence : [];
 
-  // Once the draw ceremony has finished (or the game is over), both arrays are fully public.
-  if (session?.status !== "draw") {
+  // Once bidding starts (or the game is over), the whole pick sequence is public.
+  if (normalizedSession?.status !== "draw") {
     return { lotOrder, sequence };
   }
 
-  const phase = Number(session?.drawPhase || 0);
-  if (phase === 0) {
-    const revealedLotCount = Number(session?.revealedLotCount || 0);
-    return { lotOrder: lotOrder.slice(0, revealedLotCount), sequence: [] };
-  }
-
-  const revealedPickCount = Number(session?.revealedPickCount || 0);
+  const revealedPickCount = Number(normalizedSession?.revealedPickCount || 0);
   return { lotOrder, sequence: sequence.slice(0, revealedPickCount) };
 }
 
@@ -74,9 +69,10 @@ export function getRevealedDrawState(session) {
  */
 export function isSessionParticipant(session, username) {
   if (!session || !username) return false;
+  const normalizedSession = normalizeSessionDocument(session);
   const needle = String(username).toLowerCase();
-  if (String(session.host || "").toLowerCase() === needle) return true;
-  const participants = Array.isArray(session.participants) ? session.participants : [];
+  if (String(normalizedSession.host || "").toLowerCase() === needle) return true;
+  const participants = Array.isArray(normalizedSession.participants) ? normalizedSession.participants : [];
   return participants.some((p) => String(p?.name || "").toLowerCase() === needle);
 }
 
@@ -88,20 +84,21 @@ export function isSessionParticipant(session, username) {
  */
 export function sanitizeSessionForViewer(session, viewerUsername) {
   if (!session) return session;
+  const normalizedSession = normalizeSessionDocument(session);
 
-  const visibleLotSet = getVisibleLotSet(session);
-  const { lotOrder, sequence } = getRevealedDrawState(session);
+  const visibleLotSet = getVisibleLotSet(normalizedSession);
+  const { lotOrder, sequence } = getRevealedDrawState(normalizedSession);
   const sanitized = {
-    ...session,
+    ...normalizedSession,
     lotOrder,
     sequence,
-    playerPool: filterPlayersByVisibleLots(session.playerPool, visibleLotSet),
-    shuffledPlayers: filterPlayersByVisibleLots(session.shuffledPlayers, visibleLotSet),
+    playerPool: filterPlayersByVisibleLots(normalizedSession.playerPool, visibleLotSet),
+    shuffledPlayers: filterPlayersByVisibleLots(normalizedSession.shuffledPlayers, visibleLotSet),
   };
 
   delete sanitized.mysteryPools;
 
-  const currentMap = session.mysteryCurrent;
+  const currentMap = normalizedSession.mysteryCurrent;
   if (viewerUsername && currentMap && typeof currentMap === "object" && viewerUsername in currentMap) {
     sanitized.mysteryCurrent = { [viewerUsername]: currentMap[viewerUsername] };
   } else {
@@ -117,20 +114,21 @@ export function sanitizeSessionForViewer(session, viewerUsername) {
  */
 export function sanitizeRoomPreview(session) {
   if (!session) return session;
+  const normalizedSession = normalizeSessionDocument(session);
   return {
-    id: session.id,
-    roomCode: session.roomCode,
-    name: session.name,
-    host: session.host,
-    status: session.status,
-    budgetPerBidder: session.budgetPerBidder,
-    participantNames: Array.isArray(session.participantNames) ? session.participantNames : [],
-    totalLots: Array.isArray(session.lotOrder) ? session.lotOrder.length : 0,
-    mysteryEnabled: Boolean(session.mysteryEnabled),
-    groupsEnabled: Boolean(session.groupsEnabled),
-    groupCount: Number(session.groupCount) || 0,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
+    id: normalizedSession.id,
+    roomCode: normalizedSession.roomCode,
+    name: normalizedSession.name,
+    host: normalizedSession.host,
+    status: normalizedSession.status,
+    budgetPerBidder: normalizedSession.budgetPerBidder,
+    participantNames: Array.isArray(normalizedSession.participantNames) ? normalizedSession.participantNames : [],
+    totalLots: Array.isArray(normalizedSession.lotOrder) ? normalizedSession.lotOrder.length : 0,
+    mysteryEnabled: Boolean(normalizedSession.mysteryEnabled),
+    groupsEnabled: Boolean(normalizedSession.groupsEnabled),
+    groupCount: Number(normalizedSession.groupCount) || 0,
+    createdAt: normalizedSession.createdAt,
+    updatedAt: normalizedSession.updatedAt,
   };
 }
 
@@ -138,10 +136,12 @@ export function sanitizeRoomPreview(session) {
  * Every username that should receive updates about this session (host + all participants).
  */
 export function collectSessionRecipients(session) {
+  const normalizedSession = normalizeSessionDocument(session);
   const names = new Set();
-  if (session?.host) names.add(session.host);
-  (Array.isArray(session?.participants) ? session.participants : []).forEach((p) => {
+  if (normalizedSession?.host) names.add(normalizedSession.host);
+  (Array.isArray(normalizedSession?.participants) ? normalizedSession.participants : []).forEach((p) => {
     if (p?.name) names.add(p.name);
   });
   return names;
 }
+import { normalizeSessionDocument } from "./sessionState.js";

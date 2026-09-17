@@ -3,6 +3,7 @@ import { Spinner } from "../components/Spinner.jsx";
 import { BTN } from "../utils/styles.js";
 import { apiForgotPassword, apiLogin, apiRegister, apiResetPassword } from "../lib/api.js";
 import { setAnalyticsAuthToken, trackEvent } from "../lib/analytics.js";
+import { FOOTBALL_THEME, createSurfaceStyle } from "../theme/footballTheme.js";
 
 export function AuthScreen({ onAuth, pendingRoomCode }) {
   const [mode, setMode] = React.useState("login"); // login | register | forgot
@@ -76,7 +77,7 @@ export function AuthScreen({ onAuth, pendingRoomCode }) {
 
   const field = (label, value, onChange, type = "text") =>
     React.createElement("div", { key: label, style:{ marginBottom:14 } },
-      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#555",
+      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#cbd5e1",
         letterSpacing:2, marginBottom:5 } }, label.toUpperCase()),
       React.createElement("input", {
         type,
@@ -91,29 +92,29 @@ export function AuthScreen({ onAuth, pendingRoomCode }) {
     );
 
   return React.createElement("div", {
-    style:{ minHeight:"100vh", background:"#04060a", display:"flex", alignItems:"center",
+    style:{ minHeight:"100vh", background:"transparent", display:"flex", alignItems:"center",
       justifyContent:"center", padding:20 }
   },
-    React.createElement("div", { style:{ width:"100%", maxWidth:420, animation:"fadeUp .5s ease" } },
+    React.createElement("div", { style:{ width:"100%", maxWidth:420, animation:"fadeUp .5s ease", position:"relative", zIndex:2 } },
       React.createElement("div", { style:{ textAlign:"center", marginBottom:36 } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:64, color:"#fff", letterSpacing:6, lineHeight:.9 } }, "THE AUCTION"),
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#FFD700", letterSpacing:10, marginTop:4 } }, "ROOM"),
-        React.createElement("div", { style:{ width:50, height:2, background:"#FFD700", margin:"10px auto 0", borderRadius:1 } })
+      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:64, color:"#fff", letterSpacing:6, lineHeight:.9, textShadow:"0 4px 24px rgba(0,0,0,.35)" } }, "THE AUCTION"),
+      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#4FC3F7", letterSpacing:10, marginTop:4, textShadow:"0 2px 12px rgba(79,195,247,.22)" } }, "ROOM"),
+      React.createElement("div", { style:{ width:60, height:3, background:"linear-gradient(90deg,#4FC3F7,#8fe7c0)", margin:"10px auto 0", borderRadius:999, boxShadow:"0 0 18px rgba(79,195,247,.35)" } })
       ),
-      React.createElement("div", { style:{ background:"#0a0c12", border:"1px solid #1e2230", borderRadius:14, padding:28 } },
-        mode !== "forgot" && React.createElement("div", { style:{ display:"flex", gap:0, marginBottom:22, background:"#060810",
+    React.createElement("div", { style:{ ...createSurfaceStyle({ padding: 28, radius: 18, elevated: true }), background:"rgba(8,18,13,.90)", border:"1px solid rgba(143,231,192,.16)", backdropFilter:"blur(16px)" } },
+      mode !== "forgot" && React.createElement("div", { style:{ display:"flex", gap:0, marginBottom:22, background:"rgba(255,255,255,.04)",
           borderRadius:8, padding:3 } },
           ["login","register"].map(m =>
             React.createElement("button", { key:m, onClick: () => switchMode(m), style:{
-              flex:1, background: mode===m ? "#FFD700" : "transparent",
-              color: mode===m ? "#000" : "#666", border:"none", borderRadius:6,
+              flex:1, background: mode===m ? "linear-gradient(135deg,#4FC3F7,#00FF88)" : "transparent",
+              color: mode===m ? "#071018" : "#7b879a", border:"none", borderRadius:6,
               padding:"7px 0", cursor:"pointer", fontFamily:"'Bebas Neue'",
               fontSize:14, letterSpacing:1, transition:"all .2s"
             }}, m.toUpperCase())
           )
         ),
 
-        mode === "forgot" && React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:"#FFD700",
+        mode === "forgot" && React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:20, color:FOOTBALL_THEME.gold,
           letterSpacing:2, marginBottom:18, textAlign:"center" } }, "RESET PASSWORD"),
 
         (mode === "login" || mode === "register") && [
@@ -126,8 +127,8 @@ export function AuthScreen({ onAuth, pendingRoomCode }) {
 
         mode === "forgot" && resetToken && React.createElement(React.Fragment, null,
           React.createElement("div", { style:{
-            background:"#FFD70012", border:"1px solid #FFD70044", borderRadius:8, padding:"10px 12px",
-            marginBottom:14, fontFamily:"'Rajdhani'", fontSize:12, color:"#FFD700", wordBreak:"break-all"
+            background:"#8fe7c016", border:"1px solid #8fe7c055", borderRadius:8, padding:"10px 12px",
+            marginBottom:14, fontFamily:"'Rajdhani'", fontSize:12, color:"#8fe7c0", wordBreak:"break-all"
           } }, "Reset code: ", React.createElement("b", null, resetToken)),
           field("Reset code", resetTokenInput, setResetTokenInput),
           field("New password", newPassword, setNewPassword, "password"),

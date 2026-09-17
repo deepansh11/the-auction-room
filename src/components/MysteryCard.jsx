@@ -206,7 +206,7 @@ export function MysteryCard({ available, used, revealedPlayer, price, hasPool, a
 
 // Canvas-based scratch layer. Sits absolutely positioned over the hidden card preview and
 // erases itself (destination-out) as the user drags across it, revealing the DOM underneath.
-function ScratchLayer({ width, height, disabled, onRevealed }) {
+function ScratchLayer({ width, height, disabled, onRevealed, onScratchStart }) {
   const canvasRef = React.useRef(null);
   const drawingRef = React.useRef(false);
   const revealedRef = React.useRef(false);
@@ -294,7 +294,13 @@ function ScratchLayer({ width, height, disabled, onRevealed }) {
       opacity: cleared ? 0 : 1, transition: cleared ? "opacity .5s ease" : "none",
       pointerEvents: cleared ? "none" : "auto",
     },
-    onPointerDown: (e) => { drawingRef.current = true; const { x, y } = pointFromEvent(e); scratchAt(x, y); checkProgress(); },
+    onPointerDown: (e) => {
+      drawingRef.current = true;
+      onScratchStart?.();
+      const { x, y } = pointFromEvent(e);
+      scratchAt(x, y);
+      checkProgress();
+    },
     onPointerMove: (e) => { if (!drawingRef.current) return; const { x, y } = pointFromEvent(e); scratchAt(x, y); checkProgress(); },
     onPointerUp: () => { drawingRef.current = false; },
     onPointerLeave: () => { drawingRef.current = false; },
@@ -305,7 +311,7 @@ function ScratchLayer({ width, height, disabled, onRevealed }) {
  * Full-screen scratch-reveal modal. The real player card renders underneath from the start;
  * the canvas overlay hides it until the user scratches enough of it away.
  */
-export function MysteryScratchModal({ player, tiers, price, revealing, onScratchComplete, onClose }) {
+export function MysteryScratchModal({ player, tiers, price, revealing, onScratchStart, onScratchComplete, onClose, disableClose = false }) {
   const [revealed, setRevealed] = React.useState(false);
   const firedRef = React.useRef(false);
 
@@ -320,7 +326,7 @@ export function MysteryScratchModal({ player, tiers, price, revealing, onScratch
   if (!player) {
     return React.createElement("div", {
       style: { position: "fixed", inset: 0, background: "#000000aa", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 },
-      onClick: onClose,
+      onClick: disableClose ? undefined : onClose,
     },
       React.createElement("div", { style: { color: "#888", fontFamily: "'Rajdhani'" } }, "No mystery candidate available.")
     );
@@ -346,18 +352,27 @@ export function MysteryScratchModal({ player, tiers, price, revealing, onScratch
       }, revealed ? "PLAYER REVEALED!" : "MYSTERY CARD"),
       React.createElement("div", { style: { position: "relative", width: cardWidth, height: cardHeight } },
         React.createElement(FifaPlayerCard, { player, tierData, tierKey }),
-        React.createElement(ScratchLayer, { width: cardWidth, height: cardHeight, disabled: revealed, onRevealed: handleRevealed })
+        React.createElement(ScratchLayer, {
+          width: cardWidth,
+          height: cardHeight,
+          disabled: revealed,
+          onScratchStart,
+          onRevealed: handleRevealed,
+        })
       ),
       !revealed && React.createElement("div", {
         style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#999", textAlign: "center", maxWidth: 260 },
       }, `Scratch the card to reveal your player. Confirming spends a flat ${price}M, win or lose.`),
+      disableClose && !revealed && React.createElement("div", {
+        style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#FF6B35", textAlign: "center", maxWidth: 260, fontWeight: 700 },
+      }, "Scratch started — this reveal can no longer be cancelled."),
       revealed && React.createElement("div", {
         style: { fontFamily: "'Rajdhani'", fontSize: 12, color: revealing ? "#FFD700" : "#00FF88", fontWeight: 700 },
       }, revealing ? "⏳ Adding to your squad…" : `✅ Added to your squad for ${price}M`),
       React.createElement("button", {
         onClick: onClose,
-        disabled: revealed && revealing,
-        style: { ...BTN.ghost, opacity: revealed && revealing ? 0.6 : 1 },
+        disabled: disableClose || (revealed && revealing),
+        style: { ...BTN.ghost, opacity: disableClose || (revealed && revealing) ? 0.6 : 1 },
       }, revealed ? "CLOSE" : "CANCEL")
     )
   );

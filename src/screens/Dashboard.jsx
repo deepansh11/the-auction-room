@@ -1,10 +1,11 @@
 import React from "react";
 import { Spinner } from "../components/Spinner.jsx";
 import { BTN } from "../utils/styles.js";
-import { apiListResults, apiListSessions, apiSaveAuctionPoints } from "../lib/api.js";
+import { apiDeleteResult, apiListResults, apiListSessions, apiSaveAuctionPoints } from "../lib/api.js";
 import { LOTS } from "../game/constants.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
 import { LeaderboardScreen } from "./LeaderboardScreen.jsx";
+import { FOOTBALL_THEME, createSurfaceStyle, StatusPill } from "../theme/footballTheme.js";
 
 export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack }) {
   const [sessions, setSessions] = React.useState(null);
@@ -15,6 +16,7 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
   const [pointsModal, setPointsModal] = React.useState(null); // { sessionId, participants } or null
   const [participantPoints, setParticipantPoints] = React.useState({});
   const [savingPoints, setSavingPoints] = React.useState(false);
+  const [deletingResultId, setDeletingResultId] = React.useState("");
 
   React.useEffect(() => {
     (async () => {
@@ -78,8 +80,25 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
     }
   };
 
+  const handleDeleteResult = async (result) => {
+    const resultId = result?.sessionId || result?.id || "";
+    if (!resultId || deletingResultId) return;
+    if (!window.confirm(`Delete "${result?.name || "this past game"}"? This cannot be undone.`)) return;
+
+    setDeletingResultId(resultId);
+    try {
+      await apiDeleteResult(resultId, user?.token);
+      setResults((prev) => prev.filter((entry) => (entry.sessionId || entry.id) !== resultId));
+      if (expandedResultId === resultId) setExpandedResultId("");
+    } catch (err) {
+      alert("Failed to delete game: " + err.message);
+    } finally {
+      setDeletingResultId("");
+    }
+  };
+
   return React.createElement("div", {
-    style:{ minHeight:"100vh", background:"#04060a", color:"#fff" }
+    style:{ minHeight:"100vh", background:"transparent", color:"#fff" }
   },
     pointsModal && React.createElement("div", {
       style: {
@@ -149,22 +168,22 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
         )
       )
     ),
-    React.createElement("div", { style:{ padding:"14px 24px", borderBottom:"1px solid #0f1218",
-      display:"flex", justifyContent:"space-between", alignItems:"center", background:"#060810" } },
+    React.createElement("div", { style:{ padding:"14px 24px", borderBottom:"1px solid rgba(255,255,255,.08)",
+      display:"flex", justifyContent:"space-between", alignItems:"center", background:"rgba(8,12,19,.75)", backdropFilter:"blur(12px)" } },
       React.createElement("div", { style:{ display:"flex", gap:10, alignItems:"center" } },
         onBack && React.createElement("button", { onClick:onBack, style:BTN.ghost }, "← BACK"),
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:"#FFD700", letterSpacing:2 } }, "THE AUCTION ROOM")
+        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:22, color:FOOTBALL_THEME.text, letterSpacing:2 } }, "THE AUCTION ROOM")
       ),
       React.createElement("div", { style:{ display:"flex", gap:10, alignItems:"center" } },
-        React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, `@${user.username}`),
+        React.createElement(StatusPill, { tone: "cyan" }, `@${user.username}`),
         React.createElement("button", { onClick:onLogout, style:BTN.ghost }, "SIGN OUT")
       )
     ),
-    React.createElement("div", { style:{ maxWidth:800, margin:"0 auto", padding:"36px 20px" } },
+    React.createElement("div", { style:{ maxWidth:980, margin:"0 auto", padding:"36px 20px" } },
       React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:28 } },
         React.createElement("div", null,
-          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:42, letterSpacing:3 } }, "MY AUCTIONS"),
-          React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "Create new or resume a saved session")
+          React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:42, letterSpacing:3, color:FOOTBALL_THEME.text } }, "MY AUCTIONS"),
+          React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#9aa5b5" } }, "Create new or resume a saved session")
         ),
         React.createElement("button", { onClick:onNewSession, style:BTN.gold }, "+ NEW AUCTION")
       ),
@@ -177,15 +196,16 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
               : React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10, marginBottom:28 } },
                   sessions.map((s, i) =>
                 React.createElement("div", { key:i, style:{
-                  background:"#0a0c12", border:"1px solid #1e2230", borderRadius:12,
-                  padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
+                  ...createSurfaceStyle({ padding: 16, radius: 16, elevated: true }),
+                  background:"rgba(8,12,19,.74)",
+                  display:"flex", justifyContent:"space-between", alignItems:"center",
                   animation:`rowIn .25s ease ${i*.05}s both`
                 }},
                   React.createElement("div", null,
-                    React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, s.name || `Auction #${i+1}`),
-                    React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
+                    React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:FOOTBALL_THEME.text, letterSpacing:2 } }, s.name || `Auction #${i+1}`),
+                    React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#9aa5b5", marginTop:2 } },
                       `${s.participants?.length || 0} players · Lot ${(s.lotIdx||0)+1}/${s.lotOrder?.length || LOTS} · `,
-                      React.createElement("span", { style:{ color: s.status==="complete" ? "#00FF88" : "#FFD700" } },
+                      React.createElement("span", { style:{ color: s.status==="complete" ? FOOTBALL_THEME.green : FOOTBALL_THEME.gold } },
                         s.status === "complete" ? "✓ Complete" : "In Progress"
                       )
                     )
@@ -202,9 +222,9 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
                   React.createElement("button", { 
                     onClick: () => setActiveTab("results"), 
                     style:{
-                      background: activeTab === "results" ? "#FFD700" : "#0d0f16",
-                      color: activeTab === "results" ? "#000" : "#888",
-                      border: `1px solid ${activeTab === "results" ? "#FFD700" : "#1e2028"}`,
+                      background: activeTab === "results" ? "linear-gradient(135deg,#4FC3F7,#00FF88)" : "rgba(8,12,19,.72)",
+                      color: activeTab === "results" ? "#051018" : "#9aa5b5",
+                      border: `1px solid ${activeTab === "results" ? "rgba(79,195,247,.45)" : "rgba(255,255,255,.08)"}`,
                       borderRadius: 8,
                       padding: "8px 16px",
                       cursor: "pointer",
@@ -216,9 +236,9 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
                   React.createElement("button", { 
                     onClick: () => setActiveTab("leaderboard"), 
                     style:{
-                      background: activeTab === "leaderboard" ? "#FFD700" : "#0d0f16",
-                      color: activeTab === "leaderboard" ? "#000" : "#888",
-                      border: `1px solid ${activeTab === "leaderboard" ? "#FFD700" : "#1e2028"}`,
+                      background: activeTab === "leaderboard" ? "linear-gradient(135deg,#FFD700,#FFA500)" : "rgba(8,12,19,.72)",
+                      color: activeTab === "leaderboard" ? "#041019" : "#9aa5b5",
+                      border: `1px solid ${activeTab === "leaderboard" ? "rgba(255,215,0,.45)" : "rgba(255,255,255,.08)"}`,
                       borderRadius: 8,
                       padding: "8px 16px",
                       cursor: "pointer",
@@ -231,25 +251,31 @@ export function Dashboard({ user, onLogout, onNewSession, onLoadSession, onBack 
               ),
               activeTab === "results" && React.createElement(React.Fragment, null,
                 results.length === 0
-                  ? React.createElement("div", { style:{ textAlign:"center", padding:"30px 0", color:"#333",
+                  ? React.createElement("div", { style:{ textAlign:"center", padding:"30px 0", color:"#667189",
                       fontFamily:"'Rajdhani'", fontSize:15 } }, "No completed auctions yet")
                   : React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
                       results.map((result, i) =>
                         React.createElement("div", { key:`result-${i}`, style:{
-                          background:"#0a0c12", border:"1px solid #1e2230", borderRadius:12,
-                          padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center",
+                          ...createSurfaceStyle({ padding: 16, radius: 16 }),
+                          background:"rgba(8,12,19,.72)",
+                          display:"flex", justifyContent:"space-between", alignItems:"center",
                           animation:`rowIn .25s ease ${i*.05}s both`
                         } },
                           React.createElement("div", { style:{ width:"100%" } },
                             React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center" } },
                               React.createElement("div", null,
-                                React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff", letterSpacing:2 } }, result.name || `Auction #${i+1}`),
-                                React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", marginTop:2 } },
+                                React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:FOOTBALL_THEME.text, letterSpacing:2 } }, result.name || `Auction #${i+1}`),
+                                React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#9aa5b5", marginTop:2 } },
                                   `${result.participants?.length || 0} players · ${result.roomCode || "No room code"} · `,
-                                  React.createElement("span", { style:{ color:"#00FF88" } }, "✓ Complete")
+                                  React.createElement("span", { style:{ color:FOOTBALL_THEME.green } }, "✓ Complete")
                                 )
                               ),
-                              React.createElement("div", { style:{ display:"flex", gap:8 } },
+                              React.createElement("div", { style:{ display:"flex", gap:8, flexWrap:"wrap", justifyContent:"flex-end" } },
+                                result.host === user.username && React.createElement("button", {
+                                  onClick: () => handleDeleteResult(result),
+                                  disabled: deletingResultId === (result.sessionId || result.id),
+                                  style: { ...BTN.ghost, borderColor: "#FF6B3544", color: "#FF6B35", opacity: deletingResultId === (result.sessionId || result.id) ? 0.6 : 1 }
+                                }, deletingResultId === (result.sessionId || result.id) ? "DELETING…" : "🗑 DELETE"),
                                 React.createElement("button", {
                                   onClick: () => handlePointsModalOpen(result.sessionId, result.participants || []),
                                   style: { ...BTN.ghost, borderColor: "#FFD70044", color: "#FFD700" }

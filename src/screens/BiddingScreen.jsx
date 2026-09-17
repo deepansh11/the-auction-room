@@ -8,14 +8,23 @@ import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
 import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, LOTS, MYSTERY_CARD_PRICE, getTierData, getTierKey } from "../game/constants.js";
-import { apiAbandonSession, apiGetSession, apiUpdateSession, apiReadmitPlayer } from "../lib/api.js";
+import { apiAbandonSession, apiGetSession, apiGetSessionBackup, apiOpenTransferMarket, apiUpdateSession, apiReadmitPlayer } from "../lib/api.js";
 import { subscribeToSessionStream } from "../lib/realtime.js";
 import { rotateArray } from "../utils/random.js";
 import { trackEvent } from "../lib/analytics.js";
+import { TeamBadge, StatusPill, getParticipantAccent } from "../theme/footballTheme.js";
+
+function getPlayerAcquisitionPrice(player, tiers) {
+  const explicitPrice = Number(player?.purchasePrice);
+  if (Number.isFinite(explicitPrice)) return explicitPrice;
+  if (player?.viaMystery) return MYSTERY_CARD_PRICE;
+  return Number(getTierData(Number(player?.rating), tiers)?.price || 0);
+}
 
 export function BiddingScreen({ session: initSession, user, wishlists, onWishlist, onEnd, onAbandon }) {
   const baseSessionRef = React.useRef(initSession);
   const [participants, setParticipants] = React.useState(Array.isArray(initSession?.participants) ? initSession.participants : []);
+  const [sessionStatus, setSessionStatus] = React.useState(initSession?.status || "active");
   const [lotIdx, setLotIdx] = React.useState(initSession.lotIdx || 0);
   const [passedThisLot, setPassedThisLot] = React.useState(new Set(initSession.passedThisLot || []));
   const [turnIdx, setTurnIdx] = React.useState(initSession.turnIdx || 0);
@@ -41,11 +50,19 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [mysteryEnabled, setMysteryEnabled] = React.useState(Boolean(initSession.mysteryEnabled));
   const [mysteryCurrent, setMysteryCurrent] = React.useState(initSession.mysteryCurrent || {});
   const [mysteryUsed, setMysteryUsed] = React.useState(initSession.mysteryUsed || {});
+  const [transferWindow, setTransferWindow] = React.useState(initSession.transferWindow || {});
+  const [soldPlayerIds, setSoldPlayerIds] = React.useState(Array.isArray(initSession?.soldPlayerIds) ? initSession.soldPlayerIds : []);
+  const [carriedBudgets, setCarriedBudgets] = React.useState(initSession.carriedBudgets || {});
   const [mysteryModalOpen, setMysteryModalOpen] = React.useState(false);
+  const [mysteryScratchStarted, setMysteryScratchStarted] = React.useState(false);
   const [mysteryDisclaimerOpen, setMysteryDisclaimerOpen] = React.useState(false);
   const [abandonedBy, setAbandonedBy] = React.useState(Array.isArray(initSession?.abandonedBy) ? initSession.abandonedBy : []);
   const [readmitOpen, setReadmitOpen] = React.useState(false);
   const [readmitPending, setReadmitPending] = React.useState(false);
+  const [backupPending, setBackupPending] = React.useState(false);
+  const [selectedSales, setSelectedSales] = React.useState(new Set());
+  const [saleSubmitting, setSaleSubmitting] = React.useState(false);
+  const [openingTransferMarket, setOpeningTransferMarket] = React.useState(false);
   const lastPickEventRef = React.useRef(initSession.lastPickEvent?.id || null);
   const syncNowRef = React.useRef(() => {});
   const lastAutoSkippedRef = React.useRef(null);
@@ -156,6 +173,21 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const userCanAct = Boolean(currentPickerName && currentPickerName === user.username);
 
   const myParticipant = participants.find((p) => p.name === user.username) || null;
+  const inTransferWindow = sessionStatus === "transfer";
+  const transferSaleMin = Number(transferWindow?.requiredSalesMin || 2);
+  const transferSaleMax = Number(transferWindow?.requiredSalesMax || 5);
+  const myTransferCompleted = Array.isArray(transferWindow?.completedBy) && transferWindow.completedBy.includes(user.username);
+  const selectedSalePlayers = myParticipant
+    ? myParticipant.squad.filter((player) => selectedSales.has(player.id))
+    : [];
+  const selectedSaleBudgetGain = selectedSalePlayers.reduce(
+    (sum, player) => sum + getPlayerAcquisitionPrice(player, activeTiers),
+    0
+  );
+  const everyoneCompletedTransferSales = inTransferWindow
+    && Array.isArray(transferWindow?.completedBy)
+    && participants.length > 0
+    && transferWindow.completedBy.length >= participants.length;
   const myMysteryUsed = Boolean(mysteryUsed?.[user.username]);
   const myMysteryCandidateId = mysteryCurrent?.[user.username];
   const myMysteryCandidate = myMysteryCandidateId != null
@@ -172,6 +204,22 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     && myMysteryAffordable && myMysterySquadHasRoom
     && lotOpen && !lotClosing && userCanAct
   );
+
+  React.useEffect(() => {
+    if (!myParticipant) {
+      setSelectedSales(new Set());
+      return;
+    }
+    setSelectedSales((prev) => {
+      const next = new Set();
+      prev.forEach((id) => {
+        if (myParticipant.squad.some((player) => player.id === id)) {
+          next.add(id);
+        }
+      });
+      return next;
+    });
+  }, [myParticipant]);
 
   const showToast = (msg, color="#FFD700") => {
     setToast({ msg, color });
@@ -221,13 +269,17 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       updatedAt: Date.now(),
       ...extras,
     };
+    setSessionStatus(updated.status || "active");
+    setTransferWindow(updated.transferWindow || {});
+    setSoldPlayerIds(Array.isArray(updated.soldPlayerIds) ? updated.soldPlayerIds : []);
+    setCarriedBudgets(updated.carriedBudgets || {});
     try {
       await apiUpdateSession(initSession.id, updated, user?.token);
       baseSessionRef.current = updated;
       syncNowRef.current?.();
       return true;
     } catch (err) {
-      showToast("Sync failed. Retrying…", "#FF6B35");
+      console.warn("Session sync failed; background sync will retry.", err);
       return false;
     }
   }, [initSession, lotOpen, lotClosing, user?.token, sequence, lotOrder, activePlayers, activeTiers, mysteryUsed]);
@@ -247,6 +299,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       baseSessionRef.current = latest;
 
       setParticipants(latest.participants || []);
+      setSessionStatus(latest.status || "active");
       setLotIdx(latest.lotIdx || 0);
       setTurnIdx(latest.turnIdx || 0);
       setPassedThisLot(new Set(latest.passedThisLot || []));
@@ -260,6 +313,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       setMysteryEnabled(Boolean(latest.mysteryEnabled));
       setMysteryCurrent(latest.mysteryCurrent || {});
       setMysteryUsed(latest.mysteryUsed || {});
+      setTransferWindow(latest.transferWindow || {});
+      setSoldPlayerIds(Array.isArray(latest.soldPlayerIds) ? latest.soldPlayerIds : []);
+      setCarriedBudgets(latest.carriedBudgets || {});
       setAbandonedBy(Array.isArray(latest.abandonedBy) ? latest.abandonedBy : []);
 
       const latestPickEventId = latest.lastPickEvent?.id || null;
@@ -491,7 +547,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     trackEvent("player_picked", { lotNum: currentLotNum, price: td.price, tier: getTierKey(player.rating, activeTiers) });
 
     const pickedAt = Date.now();
-    const pickedPlayer = { ...player, pickedAt };
+    const pickedPlayer = { ...player, pickedAt, purchasePrice: td.price };
 
     const updatedParticipants = participants.map(x => x.name === part.name
       ? { ...x, budget: x.budget - td.price, squad: [...x.squad, pickedPlayer] }
@@ -537,19 +593,20 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const handleOpenMysteryCard = () => {
     if (!mysteryAvailable || actionPending) return;
     sfx("open");
+    setMysteryScratchStarted(false);
     setMysteryDisclaimerOpen(true);
   };
 
   const handleConfirmMysteryReveal = async () => {
-    if (!myParticipant || !myMysteryCandidate) { setMysteryModalOpen(false); return; }
+    if (!myParticipant || !myMysteryCandidate) { setMysteryModalOpen(false); setMysteryScratchStarted(false); return; }
     // Only block if the card was already used — don't re-check mysteryAvailable here because
     // a sync arriving mid-scratch could flip userCanAct and silently cancel a committed reveal.
-    if (myMysteryUsed) { setMysteryModalOpen(false); return; }
+    if (myMysteryUsed) { setMysteryModalOpen(false); setMysteryScratchStarted(false); return; }
     if (!beginActionLock(`Revealing Mystery Card: ${myMysteryCandidate.name}`, "mystery")) return;
 
     sfx("pick");
     trackEvent("mystery_card_used", { lotIdx });
-    const revealedPlayer = { ...myMysteryCandidate, viaMystery: true };
+    const revealedPlayer = { ...myMysteryCandidate, viaMystery: true, purchasePrice: MYSTERY_CARD_PRICE };
 
     const updatedParticipants = participants.map((x) => x.name === myParticipant.name
       ? { ...x, budget: x.budget - MYSTERY_CARD_PRICE, squad: [...x.squad, revealedPlayer] }
@@ -593,9 +650,128 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         }, sequence, lotOrder);
       }
       setMysteryModalOpen(false);
+      setMysteryScratchStarted(false);
       syncNowRef.current?.();
     } finally {
       endActionLock();
+    }
+  };
+
+  const handleDownloadBackup = async () => {
+    if (!isHost || !initSession?.id || backupPending) return;
+    setBackupPending(true);
+    try {
+      const backup = await apiGetSessionBackup(initSession.id, user?.token);
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${(initSession.name || "auction-room").replace(/[^a-z0-9-_]+/gi, "-").toLowerCase()}-${initSession.id}-backup.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast("Backup downloaded", "#00FF88");
+    } catch (err) {
+      showToast(`Backup failed: ${err.message}`, "#FF6B35");
+    } finally {
+      setBackupPending(false);
+    }
+  };
+
+  const toggleSaleSelection = (playerId) => {
+    if (!myParticipant || myTransferCompleted || saleSubmitting) return;
+    setSelectedSales((prev) => {
+      const next = new Set(prev);
+      if (next.has(playerId)) {
+        next.delete(playerId);
+        return next;
+      }
+      if (next.size >= transferSaleMax) return prev;
+      next.add(playerId);
+      return next;
+    });
+  };
+
+  const handleSubmitSales = async () => {
+    if (!myParticipant || myTransferCompleted || saleSubmitting) return;
+    if (selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax) {
+      showToast(`List ${transferSaleMin}-${transferSaleMax} players to continue`, "#FF6B35");
+      return;
+    }
+
+    setSaleSubmitting(true);
+    try {
+      const selectedIds = new Set(selectedSalePlayers.map((player) => player.id));
+      const soldEntries = selectedSalePlayers.map((player) => ({
+        ...player,
+        soldInTransferWindow: true,
+        soldAt: Date.now(),
+        salePrice: getPlayerAcquisitionPrice(player, activeTiers),
+      }));
+      const nextParticipants = participants.map((participant) => {
+        if (participant.name !== myParticipant.name) return participant;
+        const baseBudget = Number(participant.budget || 0);
+        return {
+          ...participant,
+          budget: baseBudget + selectedSaleBudgetGain,
+          squad: participant.squad.filter((player) => !selectedIds.has(player.id)),
+          soldPlayers: [...(participant.soldPlayers || []), ...soldEntries],
+        };
+      });
+      const nextTransferWindow = {
+        ...transferWindow,
+        phase: "selling",
+        completedBy: Array.from(new Set([...(transferWindow.completedBy || []), myParticipant.name])),
+      };
+      const nextSoldIds = Array.from(new Set([
+        ...soldPlayerIds,
+        ...selectedSalePlayers.map((player) => player.id),
+      ]));
+      const nextCarriedBudgets = {
+        ...carriedBudgets,
+        [myParticipant.name]: Number(myParticipant.budget || 0),
+      };
+
+      setParticipants(nextParticipants);
+      setSelectedSales(new Set());
+      await saveSession(nextParticipants, 0, 0, new Set(), "transfer", false, false, {
+        transferWindow: nextTransferWindow,
+        soldPlayerIds: nextSoldIds,
+        carriedBudgets: nextCarriedBudgets,
+      }, [], []);
+      showToast("Transfer listings submitted", "#00FF88");
+    } finally {
+      setSaleSubmitting(false);
+    }
+  };
+
+  const handleOpenTransferMarket = async () => {
+    if (!isHost || !initSession?.id || openingTransferMarket) return;
+    setOpeningTransferMarket(true);
+    try {
+      const latest = await apiOpenTransferMarket(initSession.id, user?.token);
+      baseSessionRef.current = latest;
+      setParticipants(latest.participants || []);
+      setSessionStatus(latest.status || "active");
+      setTransferWindow(latest.transferWindow || {});
+      setLotIdx(latest.lotIdx || 0);
+      setTurnIdx(latest.turnIdx || 0);
+      setPassedThisLot(new Set(latest.passedThisLot || []));
+      setLotOrder(Array.isArray(latest.lotOrder) && latest.lotOrder.length > 0 ? latest.lotOrder : [1, 2, 3, 4, 5, 6]);
+      setSequence(Array.isArray(latest.sequence) ? latest.sequence : []);
+      setActivePlayers(normalizePlayersLot(hydratePlayers(latest.shuffledPlayers || latest.playerPool || [])));
+      setLotOpen(Boolean(latest.lotOpen));
+      setLotClosing(Boolean(latest.lotClosing));
+      setMysteryCurrent(latest.mysteryCurrent || {});
+      setMysteryUsed(latest.mysteryUsed || {});
+      setSoldPlayerIds(Array.isArray(latest.soldPlayerIds) ? latest.soldPlayerIds : []);
+      setCarriedBudgets(latest.carriedBudgets || {});
+      showToast("Transfer market is ready", "#4FC3F7");
+    } catch (err) {
+      showToast(`Failed to open market: ${err.message}`, "#FF6B35");
+    } finally {
+      setOpeningTransferMarket(false);
     }
   };
 
@@ -761,7 +937,166 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     }
   };
 
-  return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 272px", height:"100vh", background:"#04060a", overflow:"hidden" } },
+  if (inTransferWindow) {
+    const unsoldCarryCount = Number(transferWindow?.unsoldCarryCount || 0);
+    const soldPool = participants.flatMap((participant, participantIdx) =>
+      (participant.soldPlayers || []).map((player) => ({
+        ...player,
+        seller: participant.name,
+        sellerIdx: participantIdx,
+      }))
+    );
+
+    return React.createElement("div", {
+      style: { minHeight: "100vh", background: "#04060a", color: "#fff", padding: 24 }
+    },
+      toast && React.createElement(Toast, toast),
+      React.createElement("div", { style: { maxWidth: 1200, margin: "0 auto" } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, marginBottom: 24, flexWrap: "wrap" } },
+          React.createElement("div", null,
+            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 44, letterSpacing: 4, color: "#FFD700" } }, "MID-SEASON TRANSFER WINDOW"),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 14, color: "#777" } },
+              `List ${transferSaleMin}-${transferSaleMax} players for re-auction before the market opens. Their exact original purchase price is returned to your budget.`),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#4FC3F7", marginTop: 6 } },
+              `${unsoldCarryCount} unsold players from the previous auction will also enter the mid-season market automatically.`)
+          ),
+          React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+            roomCode && React.createElement("div", { style:{
+              background:"#0d0f16", border:"1px solid #1e2028", borderRadius:8, padding:"8px 12px",
+              fontFamily:"'Bebas Neue'", fontSize:14, letterSpacing:2, color:"#FFD700"
+            } }, `ROOM ${roomCode}`),
+            isHost && React.createElement("button", {
+              onClick: handleDownloadBackup,
+              disabled: backupPending,
+              style:{ ...BTN.ghost, color:"#4FC3F7", borderColor:"#4FC3F744", opacity: backupPending ? 0.6 : 1 }
+            }, backupPending ? "DOWNLOADING…" : "⬇ BACKUP"),
+            React.createElement("button", {
+              onClick: handleAbandonClick,
+              style:{ ...BTN.ghost, color:isHost ? "#FF6B35" : "#FFD700", borderColor:isHost ? "#FF6B3544" : "#FFD70044" }
+            }, isHost ? "CANCEL GAME" : "ABANDON")
+          )
+        ),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18, alignItems: "start" } },
+          React.createElement("div", { style: { background: "#0a0c12", border: "1px solid #1e2230", borderRadius: 16, padding: 18 } },
+            React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 } },
+              participants.map((participant, idx) => {
+                const saleCount = (participant.soldPlayers || []).length;
+                const done = (transferWindow.completedBy || []).includes(participant.name);
+                return React.createElement("div", {
+                  key: participant.name,
+                  style: {
+                    minWidth: 160,
+                    background: "#0d0f16",
+                    border: `1px solid ${done ? "#00FF8844" : `${getParticipantAccent(idx)}33`}`,
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                  }
+                },
+                  React.createElement("div", { style: { display:"flex", alignItems:"center", gap:8, marginBottom:4 } },
+                    React.createElement(TeamBadge, { name: participant.name, color: getParticipantAccent(idx), size: 24, subtle: true }),
+                    React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 16, color: getParticipantAccent(idx), letterSpacing: 1 } }, participant.name)
+                  ),
+                  React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#888" } }, `${participant.squad.length} in squad · ${participant.budget}M available`),
+                  React.createElement("div", { style: { display:"flex", alignItems:"center", gap:6, marginTop:4 } },
+                  done ? React.createElement(StatusPill, { tone: "green" }, "SUBMITTED") : React.createElement(StatusPill, { tone: "gold" }, "LIST 2-5"),
+                    React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: done ? "#00FF88" : "#FFD700", fontWeight: 700 } },
+                    done ? `Submitted ${saleCount} listings` : `${saleCount}/${transferSaleMin}-${transferSaleMax} listed`)
+                  )
+                );
+              })
+            ),
+            myParticipant && React.createElement(React.Fragment, null,
+              React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" } },
+                React.createElement("div", null,
+                  React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, `${myParticipant.name} SQUAD`),
+                  React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#777" } },
+                    myTransferCompleted
+                      ? `Submitted. Waiting for the host to open the market. Budget ready: ${myParticipant.budget}M`
+                    : `Choose ${transferSaleMin}-${transferSaleMax} players to put back into auction. Current budget: ${myParticipant.budget}M · Budget after selected listings: ${myParticipant.budget + selectedSaleBudgetGain}M`)
+                ),
+                !myTransferCompleted && React.createElement("button", {
+                  onClick: handleSubmitSales,
+                  disabled: saleSubmitting || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax,
+                  style: { ...BTN.gold, opacity: saleSubmitting || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax ? 0.6 : 1 }
+                }, saleSubmitting ? "SUBMITTING…" : `SUBMIT ${selectedSalePlayers.length} LISTINGS`)
+              ),
+              React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+                myParticipant.squad
+                  .slice()
+                  .sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0))
+                  .map((player) => {
+                    const selected = selectedSales.has(player.id);
+                    const price = getPlayerAcquisitionPrice(player, activeTiers);
+                    return React.createElement("div", {
+                      key: player.id,
+                      style: {
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 12,
+                        background: selected ? "#FFD70012" : "#0d0f16",
+                        border: `1px solid ${selected ? "#FFD70055" : "#1e2230"}`,
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                      }
+                    },
+                      React.createElement("div", { style: { minWidth: 0 } },
+                        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 16, color: "#fff" } }, `${player.name} · ${player.rating}`),
+                        React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#777" } }, `${player.pos} · Bought for ${price}M · Returns to the transfer pool if listed`)
+                      ),
+                      React.createElement("button", {
+                        onClick: () => toggleSaleSelection(player.id),
+                        disabled: myTransferCompleted || saleSubmitting || (!selected && selectedSales.size >= transferSaleMax),
+                        style: selected
+                          ? { ...BTN.gold, padding: "8px 14px", fontSize: 12 }
+                          : { ...BTN.ghost, padding: "8px 14px", fontSize: 12, color: "#FF6B35", borderColor: "#FF6B3544" }
+                      }, selected ? "LISTED" : "PUT UP")
+                    );
+                  })
+              )
+            )
+          ),
+          React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 18 } },
+            React.createElement("div", { style: { background: "#0a0c12", border: "1px solid #1e2230", borderRadius: 16, padding: 18 } },
+              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#4FC3F7", letterSpacing: 2, marginBottom: 12 } }, "TRANSFER ENTRIES"),
+              soldPool.length === 0
+                ? React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#666" } }, "No one has listed players yet. Unsold carry-over players are added automatically when the host opens the market.")
+                : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                    soldPool.map((player, idx) =>
+                      React.createElement(PlayerRow, {
+                        key: `${player.seller}-${player.id}-${idx}`,
+                        player,
+                        sold: true,
+                        unavailableLabel: `SOLD BY ${player.seller}`,
+                        ownerColor: PCOLORS[player.sellerIdx % PCOLORS.length],
+                        isWishlist: false,
+                        onWishlist: () => {},
+                        tiers: activeTiers,
+                        participants,
+                        currentUserName: user.username,
+                      })
+                    )
+                  )
+            ),
+            isHost && React.createElement("div", { style: { background: "#0a0c12", border: "1px solid #1e2230", borderRadius: 16, padding: 18 } },
+              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#FFD700", letterSpacing: 2, marginBottom: 10 } }, "HOST CONTROL"),
+              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#888", lineHeight: 1.6, marginBottom: 14 } },
+                everyoneCompletedTransferSales
+                  ? `Everyone has submitted the required listings. Opening the market will randomize ${unsoldCarryCount} unsold carry-over players plus the listed players into new lots and refresh Mystery Card candidates.`
+                  : `Wait until every participant submits ${transferSaleMin}-${transferSaleMax} listings before opening the transfer market.`),
+              React.createElement("button", {
+                onClick: handleOpenTransferMarket,
+                disabled: !everyoneCompletedTransferSales || openingTransferMarket,
+                style: { ...BTN.gold, width: "100%", opacity: !everyoneCompletedTransferSales || openingTransferMarket ? 0.6 : 1 }
+              }, openingTransferMarket ? "OPENING MARKET…" : "OPEN TRANSFER MARKET")
+            )
+          )
+        )
+      )
+    );
+  }
+
+  return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 272px", height:"100vh", background:"transparent", overflow:"hidden" } },
     toast && React.createElement(Toast, toast),
     React.createElement(SquadAnalyser, {
       participants,
@@ -816,7 +1151,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
             style: { ...BTN.ghost, flex: 1 },
           }, "CANCEL"),
           React.createElement("button", {
-            onClick: () => { setMysteryDisclaimerOpen(false); setMysteryModalOpen(true); },
+            onClick: () => { setMysteryDisclaimerOpen(false); setMysteryScratchStarted(false); setMysteryModalOpen(true); },
             style: { ...BTN.gold, flex: 1, fontSize: 13, letterSpacing: 1 },
           }, `CONFIRM — SPEND ${MYSTERY_CARD_PRICE}M`)
         )
@@ -864,8 +1199,14 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       tiers: activeTiers,
       price: MYSTERY_CARD_PRICE,
       revealing: actionPending && actionKind === "mystery",
+      onScratchStart: () => setMysteryScratchStarted(true),
       onScratchComplete: handleConfirmMysteryReveal,
-      onClose: () => setMysteryModalOpen(false),
+      disableClose: mysteryScratchStarted,
+      onClose: () => {
+        if (mysteryScratchStarted) return;
+        setMysteryModalOpen(false);
+        setMysteryScratchStarted(false);
+      },
     }),
     showWaitingOverlayDebounced && React.createElement("div", {
       style:{
@@ -957,6 +1298,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
               onClick: () => setReadmitOpen(true),
               style:{ ...BTN.ghost, fontSize:11, color:"#FF6B35", borderColor:"#FF6B3544" }
             }, `👥 ABANDONED (${abandonedBy.length})`),
+            isHost && React.createElement("button", {
+              onClick: handleDownloadBackup,
+              disabled: backupPending,
+              style:{ ...BTN.ghost, fontSize:11, color:"#4FC3F7", borderColor:"#4FC3F744", opacity: backupPending ? 0.6 : 1 }
+            }, backupPending ? "DOWNLOADING…" : "⬇ BACKUP"),
             !lotClosing && !lotOpen && isHost && React.createElement("button", {
               onClick:handleOpenLot,
               disabled: actionPending,
