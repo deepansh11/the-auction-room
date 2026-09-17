@@ -1,6 +1,7 @@
 import React from "react";
 import { BallonDorPanel } from "../components/BallonDorPanel.jsx";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
+import { loadPlayersFromCsv } from "../data/players.js";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
 import { computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
 import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateSession } from "../lib/api.js";
@@ -761,6 +762,7 @@ export function ResultsScreen({
     const { _knockout, ...groupFixtures } = next;
     return groupFixtures;
   });
+  const [catalogPlayers, setCatalogPlayers] = React.useState([]);
   const [savingFixtureId, setSavingFixtureId] = React.useState("");
   const [knockoutScores, setKnockoutScores] = React.useState(() => (fixtures || {})._knockout || {});
   const [knockoutPublishing, setKnockoutPublishing] = React.useState(false);
@@ -785,6 +787,24 @@ export function ResultsScreen({
     setFixturesState(groupFixtures);
     setKnockoutScores((prev) => Object.keys(prev).length > 0 ? prev : (_knockout || {}));
   }, [fixtures]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    loadPlayersFromCsv()
+      .then((nextPlayers) => {
+        if (!cancelled) {
+          setCatalogPlayers(Array.isArray(nextPlayers) ? nextPlayers : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCatalogPlayers([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   React.useEffect(() => {
     setResultTransferState({
@@ -980,7 +1000,11 @@ export function ResultsScreen({
     () => purchasedPlayers.filter((player) => player.isTransferListed),
     [purchasedPlayers]
   );
-  const unpurchasedPlayers = React.useMemo(() => (Array.isArray(players) ? players : [])
+  const allAuctionPlayers = React.useMemo(
+    () => (Array.isArray(catalogPlayers) && catalogPlayers.length > 0 ? catalogPlayers : (Array.isArray(players) ? players : [])),
+    [catalogPlayers, players]
+  );
+  const unpurchasedPlayers = React.useMemo(() => allAuctionPlayers
     .filter((player) => Number.isFinite(Number(player?.id)))
     .filter((player) => !purchasedPlayerIds.has(Number(player.id)))
     .map((player) => ({
@@ -989,7 +1013,7 @@ export function ResultsScreen({
       ownerIdx: -1,
       isTransferListed: false,
       transferPrice: getPlayerAcquisitionPrice(player, tiers),
-    })), [players, purchasedPlayerIds, tiers]);
+    })), [allAuctionPlayers, purchasedPlayerIds, tiers]);
   const filteredPurchasedPlayers = React.useMemo(() => filterInventoryPlayers(purchasedPlayers, {
     search: historySearch,
     owner: historyOwnerFilter,
