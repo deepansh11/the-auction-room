@@ -37,16 +37,70 @@ export function normalizePlayerKey(value = "") {
   return String(value || "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
 }
 
+function normalizeComparisonName(value = "") {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function splitComparisonName(value = "") {
+  return normalizeComparisonName(value).split(" ").filter(Boolean);
+}
+
+function tokenMatches(leftToken = "", rightToken = "") {
+  const left = normalizeComparisonName(leftToken);
+  const right = normalizeComparisonName(rightToken);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (left.length === 1) return right.startsWith(left);
+  if (right.length === 1) return left.startsWith(right);
+  return left.startsWith(right) || right.startsWith(left);
+}
+
+function initialsForTokens(tokens = []) {
+  return tokens.map((token) => token[0] || "").join("");
+}
+
 function isCompatiblePlayerKey(left = "", right = "") {
   const a = normalizePlayerKey(left);
   const b = normalizePlayerKey(right);
   if (!a || !b) return false;
   if (a === b) return true;
 
-  const shorter = a.length <= b.length ? a : b;
-  const longer = a.length <= b.length ? b : a;
-  if (shorter.length < 4) return false;
-  return longer.includes(shorter);
+  const leftTokens = splitComparisonName(left);
+  const rightTokens = splitComparisonName(right);
+  if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+
+  const leftLast = leftTokens[leftTokens.length - 1];
+  const rightLast = rightTokens[rightTokens.length - 1];
+  if (!tokenMatches(leftLast, rightLast)) return false;
+
+  const leftGiven = leftTokens.slice(0, -1);
+  const rightGiven = rightTokens.slice(0, -1);
+  if (leftGiven.length === 0 || rightGiven.length === 0) return true;
+
+  const leftInitials = initialsForTokens(leftGiven);
+  const rightInitials = initialsForTokens(rightGiven);
+  if (leftInitials && rightInitials && (leftInitials === rightInitials || leftInitials.startsWith(rightInitials) || rightInitials.startsWith(leftInitials))) {
+    return true;
+  }
+
+  const comparedLength = Math.min(leftGiven.length, rightGiven.length);
+  for (let index = 0; index < comparedLength; index += 1) {
+    if (!tokenMatches(leftGiven[index], rightGiven[index])) {
+      return false;
+    }
+  }
+
+  if (leftGiven.length !== rightGiven.length) {
+    const extraTokens = leftGiven.length > rightGiven.length ? leftGiven.slice(comparedLength) : rightGiven.slice(comparedLength);
+    if (extraTokens.some((token) => token.length > 1)) return false;
+  }
+
+  return true;
 }
 
 export function mergePerformanceCaptureWithRoster(players = [], rosterPlayers = []) {
