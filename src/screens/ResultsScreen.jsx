@@ -711,12 +711,37 @@ function toDateTimeLocalValue(timestamp) {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-function fromDateTimeLocalValue(value) {
-  if (!value) return null;
-  const parsed = new Date(value);
+function toDateInputValue(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
+function toHourInputValue(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const date = new Date(value);
+  return String(date.getHours()).padStart(2, "0");
+}
+
+function toMinuteInputValue(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const date = new Date(value);
+  return String(date.getMinutes()).padStart(2, "0");
+}
+
+function fromDateAndTimeValue(dateValue, hourValue, minuteValue) {
+  if (!dateValue || hourValue === "" || minuteValue === "") return null;
+  const parsed = new Date(`${dateValue}T${hourValue}:${minuteValue}`);
   const timestamp = parsed.getTime();
   return Number.isFinite(timestamp) ? timestamp : null;
 }
+
+const DEADLINE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
+const DEADLINE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 
 function formatCountdown(ms) {
   if (!Number.isFinite(ms)) return "";
@@ -804,7 +829,9 @@ export function ResultsScreen({
   const [knockoutPublished, setKnockoutPublished] = React.useState(false);
   const [loadingLatest, setLoadingLatest] = React.useState(false);
   const [startingTransferWindow, setStartingTransferWindow] = React.useState(false);
-  const [deadlineDraft, setDeadlineDraft] = React.useState("");
+  const [deadlineDateDraft, setDeadlineDateDraft] = React.useState("");
+  const [deadlineHourDraft, setDeadlineHourDraft] = React.useState("");
+  const [deadlineMinuteDraft, setDeadlineMinuteDraft] = React.useState("");
   const [deadlineSaving, setDeadlineSaving] = React.useState(false);
   const [clockNow, setClockNow] = React.useState(Date.now());
   const [resultTransferState, setResultTransferState] = React.useState({
@@ -1031,7 +1058,9 @@ export function ResultsScreen({
   }, []);
 
   React.useEffect(() => {
-    setDeadlineDraft(toDateTimeLocalValue(effectiveTransferWindow.listingDeadlineAt));
+    setDeadlineDateDraft(toDateInputValue(effectiveTransferWindow.listingDeadlineAt));
+    setDeadlineHourDraft(toHourInputValue(effectiveTransferWindow.listingDeadlineAt));
+    setDeadlineMinuteDraft(toMinuteInputValue(effectiveTransferWindow.listingDeadlineAt));
   }, [effectiveTransferWindow.listingDeadlineAt]);
 
   const inventoryParticipants = React.useMemo(
@@ -1207,7 +1236,7 @@ export function ResultsScreen({
 
   const handleSaveTransferDeadline = async () => {
     if (!isHost || deadlineSaving) return;
-    const deadlineAt = fromDateTimeLocalValue(deadlineDraft);
+    const deadlineAt = fromDateAndTimeValue(deadlineDateDraft, deadlineHourDraft, deadlineMinuteDraft);
     if (!deadlineAt) {
       alert("Please choose a valid deadline.");
       return;
@@ -1257,7 +1286,9 @@ export function ResultsScreen({
           transferWindow: nextTransferWindow,
         }) : prev);
       }
-      setDeadlineDraft("");
+      setDeadlineDateDraft("");
+      setDeadlineHourDraft("");
+      setDeadlineMinuteDraft("");
     } catch (err) {
       alert(`Failed to clear deadline: ${err.message}`);
     } finally {
@@ -1920,28 +1951,62 @@ export function ResultsScreen({
               ),
               React.createElement("div", { style: { color: listingDeadlinePassed ? "#FFB84D" : "#8fe7c0", fontWeight: 700 } }, listingDeadlineText),
               isHost && React.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" } },
-                React.createElement("input", {
-                  type: "datetime-local",
-                  value: deadlineDraft,
-                  onChange: (event) => setDeadlineDraft(event.target.value),
-                  style: {
-                   background: "#0d1119",
-                   color: "#fff",
-                   border: "1px solid #263247",
-                   borderRadius: 10,
-                   padding: "8px 10px",
-                   fontFamily: "'Rajdhani'",
-                   fontSize: 12,
-                  },
-                }),
+                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, minWidth: 360 } },
+                 React.createElement("input", {
+                   type: "date",
+                   value: deadlineDateDraft,
+                   onChange: (event) => setDeadlineDateDraft(event.target.value),
+                   style: {
+                     background: "#0d1119",
+                     color: "#fff",
+                     border: "1px solid #263247",
+                     borderRadius: 10,
+                     padding: "8px 10px",
+                     fontFamily: "'Rajdhani'",
+                     fontSize: 12,
+                   },
+                 }),
+                 React.createElement("select", {
+                   value: deadlineHourDraft,
+                   onChange: (event) => setDeadlineHourDraft(event.target.value),
+                   style: {
+                     background: "#0d1119",
+                     color: "#fff",
+                     border: "1px solid #263247",
+                     borderRadius: 10,
+                     padding: "8px 10px",
+                     fontFamily: "'Rajdhani'",
+                     fontSize: 12,
+                   },
+                 }, [
+                   React.createElement("option", { key: "hour-placeholder", value: "" }, "Hour"),
+                   ...DEADLINE_HOUR_OPTIONS.map((value) => React.createElement("option", { key: value, value }, value)),
+                 ]),
+                 React.createElement("select", {
+                   value: deadlineMinuteDraft,
+                   onChange: (event) => setDeadlineMinuteDraft(event.target.value),
+                   style: {
+                     background: "#0d1119",
+                     color: "#fff",
+                     border: "1px solid #263247",
+                     borderRadius: 10,
+                     padding: "8px 10px",
+                     fontFamily: "'Rajdhani'",
+                     fontSize: 12,
+                   },
+                 }, [
+                   React.createElement("option", { key: "minute-placeholder", value: "" }, "Minute"),
+                   ...DEADLINE_MINUTE_OPTIONS.map((value) => React.createElement("option", { key: value, value }, value)),
+                 ])
+                ),
                 React.createElement("button", {
-                  onClick: handleSaveTransferDeadline,
-                  disabled: deadlineSaving || !deadlineDraft,
-                  style: {
+                 onClick: handleSaveTransferDeadline,
+                 disabled: deadlineSaving || !deadlineDateDraft || deadlineHourDraft === "" || deadlineMinuteDraft === "",
+                 style: {
                    ...BTN.gold,
                    padding: "8px 14px",
                    fontSize: 12,
-                   opacity: deadlineSaving || !deadlineDraft ? 0.6 : 1,
+                   opacity: deadlineSaving || !deadlineDateDraft || deadlineHourDraft === "" || deadlineMinuteDraft === "" ? 0.6 : 1,
                   }
                 }, deadlineSaving ? "SAVING…" : "SET DEADLINE"),
                 React.createElement("button", {
