@@ -604,6 +604,11 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
       return res.status(409).json({ error: "No eligible players available for the transfer market" });
     }
 
+    const listingDeadlineAt = Number(session.transferWindow?.listingDeadlineAt || sourceResult.transferWindow?.listingDeadlineAt || 0);
+    if (Number.isFinite(listingDeadlineAt) && listingDeadlineAt > 0 && Date.now() < listingDeadlineAt) {
+      return res.status(409).json({ error: "Wait until the transfer listing deadline ends before opening the market" });
+    }
+
     const setup = generateAuctionSetup({
       selectedPlayers: transferPlayerPool,
       tiers: session.tiers,
@@ -669,6 +674,8 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
         completedBy: nextParticipants.map((participant) => participant.name),
         closedAt: Date.now(),
         unsoldCarryCount: Number(session.transferWindow?.unsoldCarryCount) || 0,
+        listingDeadlineAt: Number(session.transferWindow?.listingDeadlineAt || sourceResult.transferWindow?.listingDeadlineAt || 0) || null,
+        listingDeadlineSetAt: Number(session.transferWindow?.listingDeadlineSetAt || sourceResult.transferWindow?.listingDeadlineSetAt || 0) || null,
       },
       status: "active",
       updatedAt: Date.now(),

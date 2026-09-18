@@ -331,6 +331,15 @@ export async function apiStartTransferWindow(auctionResultId, token) {
   return normalizeSessionRecord(data?.session);
 }
 
+export async function apiUpdateResultTransferWindow(auctionResultId, transferWindow, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/transfer-window`, {
+    method: "PUT",
+    body: { listingDeadlineAt: transferWindow?.listingDeadlineAt ?? null },
+    token,
+  });
+  return data?.result;
+}
+
 export async function apiOpenTransferMarket(sessionId, token) {
   const data = await request(`/api/sessions/${encodeURIComponent(sessionId)}/transfer/open-market`, {
     method: "POST",

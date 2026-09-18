@@ -1,7 +1,7 @@
 import React from "react";
 import { PitchView } from "../components/PitchView.jsx";
 import { BTN } from "../utils/styles.js";
-import { PCOLORS, FORMATIONS, BUDGET, SQUAD_MIN, SQUAD_MAX, TIERS, getTierKey, getTierData } from "../game/constants.js";
+import { PCOLORS, FORMATIONS, BUDGET, SQUAD_MIN, SQUAD_MAX, TIERS, getTierKey, getTierData, getPosGroup } from "../game/constants.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
 
 export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS, selectedName, onClose,
@@ -36,20 +36,38 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
 
   const p = selfOnlyParticipants.find((x) => x.name === sel) || selfOnlyParticipants[0];
   const squad = p?.squad || [];
+  const playerCatalog = React.useMemo(() => {
+    const byId = new Map();
+    const byName = new Map();
+    (Array.isArray(players) ? players : []).forEach((player) => {
+      if (Number.isFinite(Number(player?.id))) byId.set(Number(player.id), player);
+      const normalizedName = String(player?.name || "").trim().toLowerCase();
+      if (normalizedName) byName.set(normalizedName, player);
+    });
+    return { byId, byName };
+  }, [players]);
+  const resolvedSquad = React.useMemo(() => squad.map((player) => {
+    const byId = Number.isFinite(Number(player?.id)) ? playerCatalog.byId.get(Number(player.id)) : null;
+    const byName = String(player?.name || "").trim().toLowerCase() ? playerCatalog.byName.get(String(player.name).trim().toLowerCase()) : null;
+    return {
+      ...(byId || byName || {}),
+      ...player,
+    };
+  }), [playerCatalog, squad]);
   const fmt = fmts[p?.name] || "4-3-3";
   const pIdx = participants.findIndex((x) => x.name === sel);
   const spent = BUDGET - (p?.budget || 0);
-  const valid = squad.length >= SQUAD_MIN && squad.length <= SQUAD_MAX;
+  const valid = resolvedSquad.length >= SQUAD_MIN && resolvedSquad.length <= SQUAD_MAX;
   const wlist = wishlists[sel] || [];
   const wlistPlayers = players.filter(pl => wlist.includes(pl.id));
 
   const tierCounts = {};
-  squad.forEach(pl => { const k = getTierKey(pl.rating, tiers); tierCounts[k] = (tierCounts[k] || 0) + 1; });
+  resolvedSquad.forEach(pl => { const k = getTierKey(pl.rating, tiers); tierCounts[k] = (tierCounts[k] || 0) + 1; });
 
   // Planned squad-size target: how many players this bidder intends to end up with. Synced live
   // against how many they've actually bought as the auction progresses.
   const plannedTarget = plannedTargets[p?.name] ?? SQUAD_MAX;
-  const remainingSlots = Math.max(plannedTarget - squad.length, 0);
+  const remainingSlots = Math.max(plannedTarget - resolvedSquad.length, 0);
 
   // Manual pitch placements are kept per participant *and* per formation (slot indices only make
   // sense within a given formation's shape).
@@ -100,7 +118,39 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
 
   const handleDownloadSquadImage = () => {
     if (!p) return;
-    downloadSquadImage(p, { formation: fmt, tiers });
+    downloadSquadImage({ ...p, squad: resolvedSquad }, { formation: fmt, tiers });
+  };
+
+  const getPlayerStatRows = (player) => {
+    const isGK = getPosGroup(player?.pos) === "GK";
+    const baseRows = [
+      { label: "Rating", value: player?.rating ?? "--" },
+      { label: "Position", value: player?.pos || "--" },
+      { label: "Club", value: player?.club || "—" },
+      { label: "Nation", value: player?.nation || "—" },
+    ];
+    if (isGK) {
+      return [
+        ...baseRows,
+        { label: "Div", value: player?.gkDiving ?? "—" },
+        { label: "Han", value: player?.gkHandling ?? "—" },
+        { label: "Kic", value: player?.gkKicking ?? "—" },
+        { label: "Pos", value: player?.gkPositioning ?? "—" },
+        { label: "Ref", value: player?.gkReflexes ?? "—" },
+        { label: "Spe", value: player?.gkSpeed ?? "—" },
+      ];
+    }
+    return [
+      ...baseRows,
+      { label: "PAC", value: player?.pace ?? "—" },
+      { label: "SHO", value: player?.shooting ?? "—" },
+      { label: "PAS", value: player?.passing ?? "—" },
+      { label: "DRI", value: player?.dribbling ?? "—" },
+      { label: "DEF", value: player?.defending ?? "—" },
+      { label: "PHY", value: player?.physic ?? "—" },
+      { label: "WF", value: player?.weakFoot ?? "—" },
+      { label: "SM", value: player?.skillMoves ?? "—" },
+    ];
   };
 
   return React.createElement("div", {
@@ -137,10 +187,10 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
           fontFamily:"'Bebas Neue'",
           fontSize:13,
           letterSpacing:1
-        } }, `${p.name} ${p.squad.length}p`)
+        } }, `${p.name} ${resolvedSquad.length}p`)
       ),
       React.createElement("div", { style:{ display:"flex", gap:6, marginBottom:14 } },
-        ["pitch","wishlist"].map(t =>
+        ["pitch","stats","wishlist"].map(t =>
           React.createElement("button", { key:t, onClick: () => setTab(t), style:{
             background: tab===t ? "#FFD70022" : "transparent",
             color: tab===t ? "#FFD700" : "#555",
@@ -165,9 +215,9 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
               }
             }, Object.keys(FORMATIONS).map(f => React.createElement("option", { key:f, value:f, style:{ background:"#111", color:"#fff" } }, f)))
           ),
-          squad.length > 0
+          resolvedSquad.length > 0
             ? React.createElement(PitchView, {
-                squad, formation:fmt, tiers, interactive:true,
+                squad: resolvedSquad, formation:fmt, tiers, interactive:true,
                 assignments: currentAssignments,
                 benchPinnedIds: myBenchPinned,
                 onAssign: handlePitchAssign,
@@ -182,12 +232,12 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
             // Row 1: Squad size + validity
             React.createElement("div", { style:{ display:"flex", alignItems:"baseline", gap:6, marginBottom:6 } },
               React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:28,
-                color: valid ? "#00FF88" : "#FF3D71", lineHeight:1 } }, squad.length),
+                color: valid ? "#00FF88" : "#FF3D71", lineHeight:1 } }, resolvedSquad.length),
               React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#444" } }, "/16"),
               React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700, marginLeft:4,
-                color: squad.length < SQUAD_MIN ? "#FF3D71" : squad.length > SQUAD_MAX ? "#FF3D71" : "#00FF88" } },
-                squad.length < SQUAD_MIN ? `Need ${SQUAD_MIN-squad.length} more`
-                : squad.length > SQUAD_MAX ? "Over limit ⚠" : "✓ Valid squad"
+                color: resolvedSquad.length < SQUAD_MIN ? "#FF3D71" : resolvedSquad.length > SQUAD_MAX ? "#FF3D71" : "#00FF88" } },
+                resolvedSquad.length < SQUAD_MIN ? `Need ${SQUAD_MIN-resolvedSquad.length} more`
+                : resolvedSquad.length > SQUAD_MAX ? "Over limit ⚠" : "✓ Valid squad"
               )
             ),
             // Row 2: Budget bar + labels
@@ -242,7 +292,7 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
               )
             ),
             React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:"#555", marginBottom:8 } },
-              React.createElement("span", { style:{ color:"#00FF88", fontWeight:700 } }, squad.length),
+              React.createElement("span", { style:{ color:"#00FF88", fontWeight:700 } }, resolvedSquad.length),
               " bought · ",
               React.createElement("span", { style:{ color: remainingSlots > 0 ? "#FFD700" : "#555", fontWeight:700 } }, remainingSlots),
               " slots left · ",
@@ -302,6 +352,52 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
         )
       ),
 
+      tab === "stats" && React.createElement("div", { style:{ display:"grid", gap:12 } },
+        resolvedSquad.length === 0
+          ? React.createElement("div", { style:{ textAlign:"center", padding:"40px 0", color:"#333", fontFamily:"'Rajdhani'", fontSize:15 } }, "No squad stats yet")
+          : React.createElement("div", { style:{ display:"grid", gap:10 } },
+              React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", letterSpacing:1 } }, `${resolvedSquad.length} players with full stats`),
+              resolvedSquad.map((player, i) => {
+                const td = getTierData(player.rating, tiers);
+                const statRows = getPlayerStatRows(player);
+                return React.createElement("div", {
+                  key: player.id || `${player.name}-${i}`,
+                  style:{
+                    background:"#0d0f16",
+                    border:`1px solid ${td.border}`,
+                    borderRadius:10,
+                    padding:12,
+                    display:"grid",
+                    gap:10,
+                  }
+                },
+                  React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 } },
+                    React.createElement("div", null,
+                      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff" } }, `${player.name} · ${player.rating}`),
+                      React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#777" } }, `${player.pos} · ${player.club || "Unknown club"}`)
+                    ),
+                    React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:td.color } }, getTierKey(player.rating, tiers))
+                  ),
+                  React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(86px,1fr))", gap:8 } },
+                    statRows.map((row) => React.createElement("div", {
+                      key: row.label,
+                      style:{
+                        background:"#05070d",
+                        border:"1px solid #1e2230",
+                        borderRadius:8,
+                        padding:"8px 10px",
+                        display:"grid",
+                        gap:4,
+                      }
+                    },
+                      React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:"#7f8ea6", letterSpacing:1 } }, row.label),
+                      React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff" } }, String(row.value))
+                    ))
+                  )
+                );
+              })
+            )
+      ),
       tab === "wishlist" && React.createElement("div", null,
         wlistPlayers.length === 0
           ? React.createElement("div", { style:{ textAlign:"center", padding:"40px 0", color:"#333",

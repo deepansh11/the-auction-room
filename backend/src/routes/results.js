@@ -118,6 +118,11 @@ function buildExpectedBudgets(participants = []) {
   ]).filter(([name]) => Boolean(name)));
 }
 
+function normalizeDeadlineAt(value) {
+  const deadline = Number(value);
+  return Number.isFinite(deadline) && deadline > 0 ? deadline : null;
+}
+
 function restoreTransferredPlayer(player) {
   if (!player || typeof player !== "object") return player;
   const { soldAt, salePrice, ...restoredPlayer } = player;
@@ -208,6 +213,8 @@ function createTransferSessionFromResult(result) {
       phase: "selling",
       requiredSalesMin: 2,
       requiredSalesMax: 5,
+      listingDeadlineAt: normalizeDeadlineAt(result.transferWindow?.listingDeadlineAt),
+      listingDeadlineSetAt: normalizeDeadlineAt(result.transferWindow?.listingDeadlineSetAt),
       completedBy: (Array.isArray(result.participants) ? result.participants : [])
         .filter((participant) => {
           const listed = Array.isArray(participant?.soldPlayers) ? participant.soldPlayers.length : 0;
@@ -975,6 +982,8 @@ router.post("/results/:auctionResultId/transfer-window", requireUserAuth, async 
         activeSessionId: String(transferSession.id),
         openedAt: Date.now(),
         phase: "selling",
+        listingDeadlineAt: normalizeDeadlineAt(result.transferWindow?.listingDeadlineAt),
+        listingDeadlineSetAt: normalizeDeadlineAt(result.transferWindow?.listingDeadlineSetAt),
       },
       updatedAt: Date.now(),
     }, { merge: true });
@@ -983,6 +992,61 @@ router.post("/results/:auctionResultId/transfer-window", requireUserAuth, async 
     return res.status(201).json({ session: sanitizeSessionForViewer(transferSession, username) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to open transfer window", 500);
+    return res.status(normalized.status).json({ error: normalized.error });
+  }
+});
+
+router.put("/results/:auctionResultId/transfer-window", requireUserAuth, async (req, res) => {
+  try {
+    const { auctionResultId } = req.params;
+    if (!auctionResultId) {
+      return res.status(400).json({ error: "auctionResultId is required" });
+    }
+
+    const username = String(req.user?.username || "").trim();
+    const { db } = getFirebase();
+    const resultRef = db.collection("auctionResults").doc(auctionResultId);
+    const resultSnap = await resultRef.get();
+    if (!resultSnap.exists) return res.status(404).json({ error: "Result not found" });
+
+    const result = normalizeAuctionResultDocument(resultSnap.data());
+    if (!username || result.host !== username) {
+      return res.status(403).json({ error: "Only the host can update the transfer window" });
+    }
+
+    const listingDeadlineAt = normalizeDeadlineAt(req.body?.listingDeadlineAt);
+    const now = Date.now();
+    const nextTransferWindow = {
+      ...(result.transferWindow || {}),
+      listingDeadlineAt,
+      listingDeadlineSetAt: listingDeadlineAt ? now : null,
+    };
+
+    await resultRef.set({
+      transferWindow: nextTransferWindow,
+      updatedAt: now,
+    }, { merge: true });
+
+    const activeSessionId = String(result.transferWindow?.activeSessionId || "");
+    if (activeSessionId) {
+      const sessionRef = db.collection("sessions").doc(activeSessionId);
+      const sessionSnap = await sessionRef.get();
+      if (sessionSnap.exists) {
+        const session = normalizeSessionDocument(sessionSnap.data());
+        await sessionRef.set({
+          transferWindow: {
+            ...(session.transferWindow || {}),
+            listingDeadlineAt,
+            listingDeadlineSetAt: listingDeadlineAt ? now : null,
+          },
+          updatedAt: now,
+        }, { merge: true });
+      }
+    }
+
+    return res.json({ result: { ...result, transferWindow: nextTransferWindow, updatedAt: now } });
+  } catch (err) {
+    const normalized = normalizeFirebaseError(err, "Failed to update transfer deadline", 500);
     return res.status(normalized.status).json({ error: normalized.error });
   }
 });

@@ -21,6 +21,16 @@ function getPlayerAcquisitionPrice(player, tiers) {
   return Number(getTierData(Number(player?.rating), tiers)?.price || 0);
 }
 
+function formatCountdown(ms) {
+  if (!Number.isFinite(ms)) return "";
+  if (ms <= 0) return "00:00:00";
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${hours}:${minutes}:${seconds}`;
+}
+
 export function BiddingScreen({ session: initSession, user, wishlists, onWishlist, onEnd, onAbandon }) {
   const baseSessionRef = React.useRef(initSession);
   const [participants, setParticipants] = React.useState(Array.isArray(initSession?.participants) ? initSession.participants : []);
@@ -63,6 +73,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [selectedSales, setSelectedSales] = React.useState(new Set());
   const [saleSubmitting, setSaleSubmitting] = React.useState(false);
   const [openingTransferMarket, setOpeningTransferMarket] = React.useState(false);
+  const [clockNow, setClockNow] = React.useState(Date.now());
   const lastPickEventRef = React.useRef(initSession.lastPickEvent?.id || null);
   const syncNowRef = React.useRef(() => {});
   const lastAutoSkippedRef = React.useRef(null);
@@ -87,6 +98,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         setPlayerFaceMap(map);
       } catch (_) {}
     })();
+  }, []);
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const hydratePlayers = React.useCallback((players) => {
@@ -174,6 +190,15 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const myParticipant = participants.find((p) => p.name === user.username) || null;
   const inTransferWindow = sessionStatus === "transfer";
+  const transferDeadlineAt = Number(transferWindow?.listingDeadlineAt || 0);
+  const transferDeadlineValid = Number.isFinite(transferDeadlineAt) && transferDeadlineAt > 0;
+  const transferDeadlineRemaining = transferDeadlineValid ? transferDeadlineAt - clockNow : null;
+  const transferDeadlinePassed = transferDeadlineValid && transferDeadlineRemaining <= 0;
+  const transferDeadlineText = transferDeadlineValid
+    ? transferDeadlineRemaining > 0
+      ? `Listing deadline in ${formatCountdown(transferDeadlineRemaining)}`
+      : "Listing deadline reached"
+    : "No listing deadline set";
   const transferSaleMin = Number(transferWindow?.requiredSalesMin || 2);
   const transferSaleMax = Number(transferWindow?.requiredSalesMax || 5);
   const myTransferCompleted = Array.isArray(transferWindow?.completedBy) && transferWindow.completedBy.includes(user.username);
@@ -680,7 +705,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   };
 
   const toggleSaleSelection = (playerId) => {
-    if (!myParticipant || myTransferCompleted || saleSubmitting) return;
+    if (!myParticipant || myTransferCompleted || saleSubmitting || transferDeadlinePassed) return;
     setSelectedSales((prev) => {
       const next = new Set(prev);
       if (next.has(playerId)) {
@@ -695,6 +720,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleSubmitSales = async () => {
     if (!myParticipant || myTransferCompleted || saleSubmitting) return;
+    if (transferDeadlinePassed) {
+      showToast("⏰ Transfer listing deadline has passed", "#FFB84D");
+      return;
+    }
     if (selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax) {
       showToast(`List ${transferSaleMin}-${transferSaleMax} players to continue`, "#FF6B35");
       return;
@@ -741,6 +770,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         transferWindow: nextTransferWindow,
         soldPlayerIds: nextSoldIds,
         carriedBudgets: nextCarriedBudgets,
+        expectedBudgets: Object.fromEntries(nextParticipants.map((participant) => [
+          participant.name,
+          Number(participant?.budget || 0),
+        ])),
       }, [], []);
       showToast("Transfer listings submitted", "#00FF88");
     } finally {
@@ -750,6 +783,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleOpenTransferMarket = async () => {
     if (!isHost || !initSession?.id || openingTransferMarket) return;
+    if (!transferDeadlinePassed) {
+      showToast("Wait until the listing deadline ends before opening the market", "#FFB84D");
+      return;
+    }
     setOpeningTransferMarket(true);
     try {
       const latest = await apiOpenTransferMarket(initSession.id, user?.token);
@@ -960,7 +997,8 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
             React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 14, color: "#777" } },
               `List ${transferSaleMin}-${transferSaleMax} players for re-auction before the market opens. Their exact original purchase price is returned to your budget.`),
             React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#4FC3F7", marginTop: 6 } },
-              `${unsoldCarryCount} unsold players from the previous auction will also enter the mid-season market automatically.`)
+              `${unsoldCarryCount} unsold players from the previous auction will also enter the mid-season market automatically.`),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: transferDeadlinePassed ? "#FFB84D" : "#8fe7c0", marginTop: 6, fontWeight: 700 } }, transferDeadlineText)
           ),
           React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
             roomCode && React.createElement("div", { style:{
@@ -1014,12 +1052,14 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                   React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#777" } },
                     myTransferCompleted
                     ? `Submitted. Waiting for the host to open the market. Expected opening budget: ${myParticipant.budget}M`
-                    : `Choose ${transferSaleMin}-${transferSaleMax} players to put back into auction. Current budget: ${myParticipant.budget}M · Budget after selected listings: ${myParticipant.budget + selectedSaleBudgetGain}M`)
+                    : transferDeadlinePassed
+                      ? `Listing deadline has passed. Expected opening budget: ${myParticipant.budget}M`
+                      : `Choose ${transferSaleMin}-${transferSaleMax} players to put back into auction. Current budget: ${myParticipant.budget}M · Budget after selected listings: ${myParticipant.budget + selectedSaleBudgetGain}M`)
                 ),
                 !myTransferCompleted && React.createElement("button", {
                   onClick: handleSubmitSales,
-                  disabled: saleSubmitting || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax,
-                  style: { ...BTN.gold, opacity: saleSubmitting || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax ? 0.6 : 1 }
+                  disabled: saleSubmitting || transferDeadlinePassed || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax,
+                  style: { ...BTN.gold, opacity: saleSubmitting || transferDeadlinePassed || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax ? 0.6 : 1 }
                 }, saleSubmitting ? "SUBMITTING…" : `SUBMIT ${selectedSalePlayers.length} LISTINGS`)
               ),
               React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
@@ -1048,7 +1088,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                       ),
                       React.createElement("button", {
                         onClick: () => toggleSaleSelection(player.id),
-                        disabled: myTransferCompleted || saleSubmitting || (!selected && selectedSales.size >= transferSaleMax),
+                        disabled: myTransferCompleted || saleSubmitting || transferDeadlinePassed || (!selected && selectedSales.size >= transferSaleMax),
                         style: selected
                           ? { ...BTN.gold, padding: "8px 14px", fontSize: 12 }
                           : { ...BTN.ghost, padding: "8px 14px", fontSize: 12, color: "#FF6B35", borderColor: "#FF6B3544" }
@@ -1083,14 +1123,16 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
             isHost && React.createElement("div", { style: { background: "#0a0c12", border: "1px solid #1e2230", borderRadius: 16, padding: 18 } },
               React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#FFD700", letterSpacing: 2, marginBottom: 10 } }, "HOST CONTROL"),
               React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#888", lineHeight: 1.6, marginBottom: 14 } },
-                everyoneCompletedTransferSales
-                  ? `Everyone has submitted the required listings. Opening the market will randomize ${unsoldCarryCount} unsold carry-over players plus the listed players into new lots and refresh Mystery Card candidates.`
-                  : `Wait until every participant submits ${transferSaleMin}-${transferSaleMax} listings before opening the transfer market.`),
+              transferDeadlinePassed
+                ? `The listing deadline has ended. The host can now open the market when ready.`
+                : everyoneCompletedTransferSales
+                ? `Everyone has submitted the required listings. Opening the market will randomize ${unsoldCarryCount} unsold carry-over players plus the listed players into new lots and refresh Mystery Card candidates.`
+                : `Wait until every participant submits ${transferSaleMin}-${transferSaleMax} listings before opening the transfer market.`),
               React.createElement("button", {
-                onClick: handleOpenTransferMarket,
-                disabled: !everyoneCompletedTransferSales || openingTransferMarket,
-                style: { ...BTN.gold, width: "100%", opacity: !everyoneCompletedTransferSales || openingTransferMarket ? 0.6 : 1 }
-              }, openingTransferMarket ? "OPENING MARKET…" : "OPEN TRANSFER MARKET")
+              onClick: handleOpenTransferMarket,
+              disabled: !everyoneCompletedTransferSales || openingTransferMarket || !transferDeadlinePassed,
+              style: { ...BTN.gold, width: "100%", opacity: !everyoneCompletedTransferSales || openingTransferMarket || !transferDeadlinePassed ? 0.6 : 1 }
+              }, openingTransferMarket ? "OPENING MARKET…" : !transferDeadlinePassed ? "WAIT FOR DEADLINE" : "OPEN TRANSFER MARKET")
             )
           )
         )

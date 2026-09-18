@@ -4,7 +4,7 @@ import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { loadPlayersFromCsv } from "../data/players.js";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
 import { computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
-import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateSession } from "../lib/api.js";
+import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateResultTransferWindow, apiUpdateSession } from "../lib/api.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
 import { trackEvent } from "../lib/analytics.js";
 
@@ -702,6 +702,31 @@ function getPlayerAcquisitionPrice(player, tiers = TIERS) {
   return Number(getTierData(rating, tiers)?.price || 0);
 }
 
+function toDateTimeLocalValue(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function fromDateTimeLocalValue(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  const timestamp = parsed.getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function formatCountdown(ms) {
+  if (!Number.isFinite(ms)) return "";
+  if (ms <= 0) return "00:00:00";
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${hours}:${minutes}:${seconds}`;
+}
+
 function restoreTransferredPlayer(player) {
   if (!player || typeof player !== "object") return player;
   const { soldAt, salePrice, ...restoredPlayer } = player;
@@ -778,6 +803,9 @@ export function ResultsScreen({
   const [knockoutPublished, setKnockoutPublished] = React.useState(false);
   const [loadingLatest, setLoadingLatest] = React.useState(false);
   const [startingTransferWindow, setStartingTransferWindow] = React.useState(false);
+  const [deadlineDraft, setDeadlineDraft] = React.useState("");
+  const [deadlineSaving, setDeadlineSaving] = React.useState(false);
+  const [clockNow, setClockNow] = React.useState(Date.now());
   const [resultTransferState, setResultTransferState] = React.useState({
     participants,
     carriedBudgets: {},
@@ -936,6 +964,23 @@ export function ResultsScreen({
 
   const transferWindowAlreadyOpened = Boolean(transferWindow?.activeSessionId || transferWindow?.openedAt);
   const transferSessionId = String(transferWindow?.activeSessionId || "");
+  const listingDeadlineAt = Number(effectiveTransferWindow?.listingDeadlineAt || 0);
+  const listingDeadlineValid = Number.isFinite(listingDeadlineAt) && listingDeadlineAt > 0;
+  const listingDeadlineRemaining = listingDeadlineValid ? listingDeadlineAt - clockNow : null;
+  const listingDeadlinePassed = listingDeadlineValid && listingDeadlineRemaining <= 0;
+  const listingDeadlineText = listingDeadlineValid
+    ? listingDeadlineRemaining > 0
+      ? `Listing deadline in ${formatCountdown(listingDeadlineRemaining)}`
+      : "Listing deadline reached"
+    : "No listing deadline set";
+  const transferListingEditable = Boolean(
+    user?.token
+    && !listingDeadlinePassed
+    && (
+      (transferSessionId && transferSessionState && effectiveTransferWindow.phase === "selling")
+      || !transferSessionId
+    )
+  );
 
   const loadTransferSession = React.useCallback(async () => {
     if (!transferSessionId || !user?.token) {
@@ -977,6 +1022,15 @@ export function ResultsScreen({
   React.useEffect(() => {
     loadTransferSession();
   }, [loadTransferSession]);
+
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  React.useEffect(() => {
+    setDeadlineDraft(toDateTimeLocalValue(effectiveTransferWindow.listingDeadlineAt));
+  }, [effectiveTransferWindow.listingDeadlineAt]);
 
   const effectiveTransferWindow = transferSessionState?.transferWindow || resultTransferState.transferWindow || transferWindow || {};
   const inventoryParticipants = React.useMemo(
@@ -1076,14 +1130,6 @@ export function ResultsScreen({
     () => inventoryParticipants.find((participant) => participant.name === selectedName) || null,
     [inventoryParticipants, selectedName]
   );
-  const transferListingEditable = Boolean(
-    user?.token
-    && (
-      (transferSessionId && transferSessionState && effectiveTransferWindow.phase === "selling")
-      || !transferSessionId
-    )
-  );
-
   const handleFixtureGoalChange = (groupLabel, fixtureId, side, rawValue) => {
     const value = rawValue === "" ? null : Math.max(0, parseInt(rawValue, 10) || 0);
     setFixturesState((prev) => {
@@ -1138,6 +1184,10 @@ export function ResultsScreen({
 
   const handleStartTransfer = async () => {
     if (!isHost || !onStartTransferWindow || startingTransferWindow || !firstRoundComplete) return;
+    if (listingDeadlineValid && !listingDeadlinePassed) {
+      alert("Wait until the transfer listing deadline ends before opening the market.");
+      return;
+    }
     setStartingTransferWindow(true);
     try {
       await onStartTransferWindow({
@@ -1151,6 +1201,66 @@ export function ResultsScreen({
       alert(`Failed to open transfer window: ${err.message}`);
     } finally {
       setStartingTransferWindow(false);
+    }
+  };
+
+  const handleSaveTransferDeadline = async () => {
+    if (!isHost || deadlineSaving) return;
+    const deadlineAt = fromDateTimeLocalValue(deadlineDraft);
+    if (!deadlineAt) {
+      alert("Please choose a valid deadline.");
+      return;
+    }
+    setDeadlineSaving(true);
+    try {
+      const nextResult = await apiUpdateResultTransferWindow(auctionResultId, { listingDeadlineAt: deadlineAt }, user.token);
+      const nextTransferWindow = nextResult?.transferWindow || {
+        ...effectiveTransferWindow,
+        listingDeadlineAt: deadlineAt,
+        listingDeadlineSetAt: Date.now(),
+      };
+      setResultTransferState((prev) => ({
+        ...prev,
+        transferWindow: nextTransferWindow,
+      }));
+      if (transferSessionId && transferSessionState) {
+        setTransferSessionState((prev) => prev ? ({
+          ...prev,
+          transferWindow: nextTransferWindow,
+        }) : prev);
+      }
+    } catch (err) {
+      alert(`Failed to save deadline: ${err.message}`);
+    } finally {
+      setDeadlineSaving(false);
+    }
+  };
+
+  const handleClearTransferDeadline = async () => {
+    if (!isHost || deadlineSaving) return;
+    setDeadlineSaving(true);
+    try {
+      await apiUpdateResultTransferWindow(auctionResultId, { listingDeadlineAt: null }, user.token);
+      const nextTransferWindow = {
+        ...effectiveTransferWindow,
+        listingDeadlineAt: null,
+        listingDeadlineSetAt: null,
+      };
+      setResultTransferState((prev) => ({
+        ...prev,
+        transferWindow: nextTransferWindow,
+      }));
+      if (transferSessionId && transferSessionState) {
+        setTransferSessionState((prev) => prev ? ({
+          ...prev,
+          transferWindow: nextTransferWindow,
+        }) : prev);
+      }
+      setDeadlineDraft("");
+    } catch (err) {
+      alert(`Failed to clear deadline: ${err.message}`);
+    } finally {
+      setDeadlineSaving(false);
     }
   };
 
@@ -1431,7 +1541,7 @@ export function ResultsScreen({
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
           groupsEnabled && isHost && onStartTransferWindow && React.createElement("button", {
             onClick: handleStartTransfer,
-            disabled: startingTransferWindow || !firstRoundComplete,
+            disabled: startingTransferWindow || !firstRoundComplete || (listingDeadlineValid && !listingDeadlinePassed),
             style: {
               background: "#4FC3F718",
               color: "#4FC3F7",
@@ -1442,9 +1552,9 @@ export function ResultsScreen({
               fontFamily: "'Bebas Neue'",
               fontSize: 14,
               letterSpacing: 1,
-              opacity: startingTransferWindow || !firstRoundComplete ? 0.6 : 1,
+              opacity: startingTransferWindow || !firstRoundComplete || (listingDeadlineValid && !listingDeadlinePassed) ? 0.6 : 1,
             }
-          }, startingTransferWindow ? "OPENING TRANSFER…" : transferWindowAlreadyOpened ? "REOPEN TRANSFER WINDOW" : firstRoundComplete ? "OPEN MID-SEASON TRANSFER" : "PLAY ALL FIRST-ROUND MATCHES"),
+          }, startingTransferWindow ? "OPENING TRANSFER…" : (listingDeadlineValid && !listingDeadlinePassed) ? "WAIT FOR DEADLINE" : transferWindowAlreadyOpened ? "REOPEN TRANSFER WINDOW" : firstRoundComplete ? "OPEN MID-SEASON TRANSFER" : "PLAY ALL FIRST-ROUND MATCHES"),
           React.createElement("button", {
             onClick: () => setAnalyserOpen(true),
             style: {
@@ -1795,16 +1905,57 @@ export function ResultsScreen({
               React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, "ALL PLAYERS"),
               React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 4 } }, "Purchased players, unpurchased pool, and live transfer listings in one place.")
             ),
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: transferListingEditable ? "#8fe7c0" : "#7f8ea6", maxWidth: 420, textAlign: "right" } },
-              transferSyncLoading
-                ? "Syncing transfer window…"
-                : !transferSessionId
-                  ? `Pre-list players now. When the transfer window opens, these listings will already be synced.`
-                  : transferListingEditable
-                    ? `Transfer window is live. List ${effectiveTransferWindow.requiredSalesMin || 2}-${effectiveTransferWindow.requiredSalesMax || 5} players from your own squad.`
-                  : transferWindowAlreadyOpened
-                    ? "Transfer listings are read-only here because the market is already open or closed."
-                    : "Transfer listings are available here."
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: listingDeadlinePassed ? "#FFB84D" : "#8fe7c0", maxWidth: 420, textAlign: "right", display: "grid", gap: 4 } },
+              React.createElement("div", null,
+                transferSyncLoading
+                  ? "Syncing transfer window…"
+                  : !transferSessionId
+                   ? `Pre-list players now. When the transfer window opens, these listings will already be synced.`
+                   : transferListingEditable
+                     ? `Transfer window is live. List ${effectiveTransferWindow.requiredSalesMin || 2}-${effectiveTransferWindow.requiredSalesMax || 5} players from your own squad.`
+                     : transferWindowAlreadyOpened
+                       ? "Transfer listings are read-only here because the market is already open or closed."
+                       : "Transfer listings are available here."
+              ),
+              React.createElement("div", { style: { color: listingDeadlinePassed ? "#FFB84D" : "#8fe7c0", fontWeight: 700 } }, listingDeadlineText),
+              isHost && React.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" } },
+                React.createElement("input", {
+                  type: "datetime-local",
+                  value: deadlineDraft,
+                  onChange: (event) => setDeadlineDraft(event.target.value),
+                  style: {
+                   background: "#0d1119",
+                   color: "#fff",
+                   border: "1px solid #263247",
+                   borderRadius: 10,
+                   padding: "8px 10px",
+                   fontFamily: "'Rajdhani'",
+                   fontSize: 12,
+                  },
+                }),
+                React.createElement("button", {
+                  onClick: handleSaveTransferDeadline,
+                  disabled: deadlineSaving || !deadlineDraft,
+                  style: {
+                   ...BTN.gold,
+                   padding: "8px 14px",
+                   fontSize: 12,
+                   opacity: deadlineSaving || !deadlineDraft ? 0.6 : 1,
+                  }
+                }, deadlineSaving ? "SAVING…" : "SET DEADLINE"),
+                React.createElement("button", {
+                  onClick: handleClearTransferDeadline,
+                  disabled: deadlineSaving,
+                  style: {
+                   ...BTN.ghost,
+                   padding: "8px 14px",
+                   fontSize: 12,
+                   color: "#FFB84D",
+                   borderColor: "#FFB84D44",
+                   opacity: deadlineSaving ? 0.6 : 1,
+                  }
+                }, "CLEAR")
+              )
             )
           ),
           React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10 } },
