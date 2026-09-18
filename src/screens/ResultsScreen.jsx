@@ -702,6 +702,15 @@ function getPlayerAcquisitionPrice(player, tiers = TIERS) {
   return Number(getTierData(rating, tiers)?.price || 0);
 }
 
+function restoreTransferredPlayer(player) {
+  if (!player || typeof player !== "object") return player;
+  const { soldAt, salePrice, ...restoredPlayer } = player;
+  return {
+    ...restoredPlayer,
+    soldInTransferWindow: false,
+  };
+}
+
 function filterInventoryPlayers(rows, { search = "", owner = "ALL", pos = "ALL", tier = "ALL", tiers = TIERS } = {}) {
   const needle = String(search || "").trim().toLowerCase();
   return (Array.isArray(rows) ? rows : []).filter((row) => {
@@ -1150,7 +1159,7 @@ export function ResultsScreen({
             ...participant,
             budget: Math.max(0, Number(participant.budget || 0) - listingPrice),
             squad: restoredPlayer
-              ? [...squad, { ...restoredPlayer, soldAt: undefined, salePrice: undefined, soldInTransferWindow: false }]
+              ? [...squad, restoreTransferredPlayer(restoredPlayer)]
               : squad,
             soldPlayers: nextSoldPlayers,
           };

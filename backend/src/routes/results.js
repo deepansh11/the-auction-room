@@ -111,6 +111,15 @@ function getTransferSalePrice(player, tiers = {}) {
   return Number(fallbackTier?.price || 0);
 }
 
+function restoreTransferredPlayer(player) {
+  if (!player || typeof player !== "object") return player;
+  const { soldAt, salePrice, ...restoredPlayer } = player;
+  return {
+    ...restoredPlayer,
+    soldInTransferWindow: false,
+  };
+}
+
 function isFirstRoundComplete(result) {
   if (!result?.groupsEnabled) return false;
   const groups = result.groups || {};
@@ -499,7 +508,7 @@ router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async
       return {
         ...participant,
         budget: Math.max(0, participantBudget - listingPrice),
-        squad: [...participantSquad, { ...existingSoldPlayer, soldAt: undefined, salePrice: undefined, soldInTransferWindow: false }],
+        squad: [...participantSquad, restoreTransferredPlayer(existingSoldPlayer)],
         soldPlayers: participantSoldPlayers.filter((player) => Number(player?.id) !== playerId),
       };
     });
