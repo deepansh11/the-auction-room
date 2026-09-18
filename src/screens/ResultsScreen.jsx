@@ -6,6 +6,7 @@ import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey }
 import { computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
 import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateResultTransferWindow, apiUpdateSession } from "../lib/api.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
+import { BTN } from "../utils/styles.js";
 import { trackEvent } from "../lib/analytics.js";
 
 function KnockoutBracket({
@@ -962,6 +963,7 @@ export function ResultsScreen({
     });
   }, [groupsEnabled, resolvedGroups, resolvedFixturesByGroup]);
 
+  const effectiveTransferWindow = transferSessionState?.transferWindow || resultTransferState.transferWindow || transferWindow || {};
   const transferWindowAlreadyOpened = Boolean(transferWindow?.activeSessionId || transferWindow?.openedAt);
   const transferSessionId = String(transferWindow?.activeSessionId || "");
   const listingDeadlineAt = Number(effectiveTransferWindow?.listingDeadlineAt || 0);
@@ -1032,7 +1034,6 @@ export function ResultsScreen({
     setDeadlineDraft(toDateTimeLocalValue(effectiveTransferWindow.listingDeadlineAt));
   }, [effectiveTransferWindow.listingDeadlineAt]);
 
-  const effectiveTransferWindow = transferSessionState?.transferWindow || resultTransferState.transferWindow || transferWindow || {};
   const inventoryParticipants = React.useMemo(
     () => (Array.isArray(transferSessionState?.participants) && transferSessionState.participants.length > 0
       ? transferSessionState.participants

@@ -358,12 +358,13 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
           : React.createElement("div", { style:{ display:"grid", gap:10 } },
               React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", letterSpacing:1 } }, `${resolvedSquad.length} players with full stats`),
               resolvedSquad.map((player, i) => {
+                const tierData = getTierData(player.rating, tiers);
                 const statRows = getPlayerStatRows(player);
                 return React.createElement("div", {
                   key: player.id || `${player.name}-${i}`,
                   style:{
                     background:"#0d0f16",
-                    border:`1px solid ${getTierData(player.rating, tiers).border}`,
+                    border:`1px solid ${tierData.border}`,
                     borderRadius:10,
                     padding:12,
                     display:"grid",
@@ -375,7 +376,7 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
                       React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:"#fff" } }, `${player.name} · ${player.rating}`),
                       React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#777" } }, `${player.pos} · ${player.club || "Unknown club"}`)
                     ),
-                    React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:getTierData(player.rating, tiers).color } }, getTierKey(player.rating, tiers))
+                    React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:14, color:tierData.color } }, getTierKey(player.rating, tiers))
                   ),
                   React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(86px,1fr))", gap:8 } },
                     statRows.map((row) => React.createElement("div", {
@@ -405,23 +406,24 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
               React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555",
                 marginBottom:10, letterSpacing:1 } }, `${wlistPlayers.length} players on wishlist`),
               wlistPlayers.map((pl, i) => {
+                const tierData = getTierData(pl.rating, tiers);
                 const inSquad = squad.some(s => s.id === pl.id);
                 return React.createElement("div", { key:pl.id, style:{
                   display:"grid", gridTemplateColumns:"36px 1fr 44px 50px 80px",
                   alignItems:"center", gap:8, padding:"7px 10px",
                   background: inSquad ? "#0a1a0a" : "#0d0f16",
-                  border:`1px solid ${inSquad ? "#00FF8833" : getTierData(pl.rating, tiers).border}`,
+                  border:`1px solid ${inSquad ? "#00FF8833" : tierData.border}`,
                   borderRadius:7, marginBottom:3,
                   animation:`rowIn .22s ease ${i*.03}s both`
                 }},
-                  React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:getTierData(pl.rating, tiers).color, textAlign:"center" } }, pl.rating),
+                  React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, color:tierData.color, textAlign:"center" } }, pl.rating),
                   React.createElement("div", null,
                     React.createElement("div", { style:{ fontFamily:"'Exo 2'", fontSize:13, fontWeight:600, color:"#ddd" } }, pl.name),
                     React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:"#444" } }, `${pl.pos} · ${pl.club}`)
                   ),
-                  React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:getTierData(pl.rating, tiers).color,
-                    background:getTierData(pl.rating, tiers).bg, border:`1px solid ${getTierData(pl.rating, tiers).border}`, borderRadius:4, textAlign:"center", padding:"2px 4px" } }, getTierKey(pl.rating, tiers)),
-                  React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:getTierData(pl.rating, tiers).color, textAlign:"right", fontWeight:700 } }, `${getTierData(pl.rating, tiers).price}M`),
+                  React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:tierData.color,
+                    background:tierData.bg, border:`1px solid ${tierData.border}`, borderRadius:4, textAlign:"center", padding:"2px 4px" } }, getTierKey(pl.rating, tiers)),
+                  React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:tierData.color, textAlign:"right", fontWeight:700 } }, `${tierData.price}M`),
                   inSquad
                     ? React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#00FF88", fontWeight:700, textAlign:"right" } }, "✓ In Squad")
                     : React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#888", textAlign:"right" } }, "Not picked yet")
