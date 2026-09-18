@@ -781,6 +781,7 @@ export function ResultsScreen({
   const [resultTransferState, setResultTransferState] = React.useState({
     participants,
     carriedBudgets: {},
+    expectedBudgets: {},
     transferWindow,
   });
   const [transferSessionState, setTransferSessionState] = React.useState(null);
@@ -819,6 +820,7 @@ export function ResultsScreen({
     setResultTransferState({
       participants,
       carriedBudgets: {},
+      expectedBudgets: {},
       transferWindow,
     });
   }, [participants, transferWindow]);
@@ -983,6 +985,32 @@ export function ResultsScreen({
       : (Array.isArray(resultTransferState.participants) && resultTransferState.participants.length > 0 ? resultTransferState.participants : participants)),
     [participants, resultTransferState.participants, transferSessionState?.participants]
   );
+  const expectedBudgetMap = React.useMemo(() => {
+    const sessionBudgets = transferSessionState?.expectedBudgets;
+    if (sessionBudgets && typeof sessionBudgets === "object" && Object.keys(sessionBudgets).length > 0) {
+      return sessionBudgets;
+    }
+    const resultBudgets = resultTransferState?.expectedBudgets;
+    if (resultBudgets && typeof resultBudgets === "object" && Object.keys(resultBudgets).length > 0) {
+      return resultBudgets;
+    }
+    return Object.fromEntries(inventoryParticipants.map((participant) => [
+      participant.name,
+      Number(participant?.budget || 0),
+    ]));
+  }, [inventoryParticipants, resultTransferState?.expectedBudgets, transferSessionState?.expectedBudgets]);
+  const expectedBudgetCards = React.useMemo(() => inventoryParticipants.map((participant) => {
+    const listedGain = (Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
+      .reduce((sum, player) => sum + (Number(player?.salePrice) || getPlayerAcquisitionPrice(player, tiers)), 0);
+    const expectedBudget = Number(expectedBudgetMap?.[participant.name] ?? participant?.budget ?? 0);
+    const baseBudget = Math.max(0, expectedBudget - listedGain);
+    return {
+      name: participant.name,
+      expectedBudget,
+      baseBudget,
+      listedGain,
+    };
+  }), [expectedBudgetMap, inventoryParticipants, tiers]);
   const purchasedPlayers = React.useMemo(() => inventoryParticipants.flatMap((participant) => {
     const ownerIdx = participants.findIndex((entry) => entry.name === participant.name);
     const squadRows = (Array.isArray(participant?.squad) ? participant.squad : []).map((player) => ({
@@ -1202,6 +1230,10 @@ export function ResultsScreen({
           ...transferSessionState,
           participants: nextParticipants,
           soldPlayerIds: nextSoldPlayerIds,
+          expectedBudgets: Object.fromEntries(nextParticipants.map((participant) => [
+            participant.name,
+            Number(participant?.budget || 0),
+          ])),
           carriedBudgets: nextCarriedBudgets,
           transferWindow: {
             ...effectiveTransferWindow,
@@ -1215,6 +1247,7 @@ export function ResultsScreen({
         setResultTransferState({
           participants: nextResult?.participants || participants,
           carriedBudgets: nextResult?.carriedBudgets || {},
+          expectedBudgets: nextResult?.expectedBudgets || {},
           transferWindow: nextResult?.transferWindow || transferWindow,
         });
       }
@@ -1773,6 +1806,23 @@ export function ResultsScreen({
                     ? "Transfer listings are read-only here because the market is already open or closed."
                     : "Transfer listings are available here."
             )
+          ),
+          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10 } },
+            expectedBudgetCards.map((item) => React.createElement("div", {
+              key: item.name,
+              style: {
+                background: "#0c1320",
+                border: "1px solid #223047",
+                borderRadius: 14,
+                padding: "12px 14px",
+                display: "grid",
+                gap: 4,
+              }
+            },
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 10, fontWeight: 700, color: "#8fe7c0", letterSpacing: 1.5 } }, item.name),
+            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 28, color: "#fff", letterSpacing: 1 } }, `${item.expectedBudget}M`),
+            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba" } }, `Carry ${item.baseBudget}M + listed ${item.listedGain}M`)
+            ))
           ),
           React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10 } },
             [

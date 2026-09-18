@@ -1013,7 +1013,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                   React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, `${myParticipant.name} SQUAD`),
                   React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#777" } },
                     myTransferCompleted
-                      ? `Submitted. Waiting for the host to open the market. Budget ready: ${myParticipant.budget}M`
+                    ? `Submitted. Waiting for the host to open the market. Expected opening budget: ${myParticipant.budget}M`
                     : `Choose ${transferSaleMin}-${transferSaleMax} players to put back into auction. Current budget: ${myParticipant.budget}M · Budget after selected listings: ${myParticipant.budget + selectedSaleBudgetGain}M`)
                 ),
                 !myTransferCompleted && React.createElement("button", {

@@ -170,6 +170,13 @@ function getTransferSalePrice(player, tiers) {
   return Number(fallbackTier?.price || 0);
 }
 
+function buildExpectedBudgets(participants = []) {
+  return Object.fromEntries((Array.isArray(participants) ? participants : []).map((participant) => [
+    participant?.name,
+    Number(participant?.budget || 0),
+  ]).filter(([name]) => Boolean(name)));
+}
+
 function getParticipantPlayerIds(participants) {
   return new Set(
     (Array.isArray(participants) ? participants : [])
@@ -627,6 +634,7 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
     const nextSession = normalizeSessionDocument({
       ...session,
       participants: nextParticipants,
+      expectedBudgets: buildExpectedBudgets(nextParticipants),
       participantNames: reconcileParticipantNames({
         ...session,
         participants: nextParticipants,

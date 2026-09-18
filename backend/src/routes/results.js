@@ -111,6 +111,13 @@ function getTransferSalePrice(player, tiers = {}) {
   return Number(fallbackTier?.price || 0);
 }
 
+function buildExpectedBudgets(participants = []) {
+  return Object.fromEntries((Array.isArray(participants) ? participants : []).map((participant) => [
+    participant?.name,
+    Number(participant?.budget || 0),
+  ]).filter(([name]) => Boolean(name)));
+}
+
 function restoreTransferredPlayer(player) {
   if (!player || typeof player !== "object") return player;
   const { soldAt, salePrice, ...restoredPlayer } = player;
@@ -192,6 +199,7 @@ function createTransferSessionFromResult(result) {
         Number(result?.carriedBudgets?.[participant.name] ?? participant?.budget ?? 0),
       ])
     ),
+    expectedBudgets: buildExpectedBudgets(result.participants),
     soldPlayerIds: (Array.isArray(result.participants) ? result.participants : [])
       .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
       .map((player) => Number(player?.id))
@@ -540,6 +548,7 @@ router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async
       ...result,
       participants: nextParticipants,
       carriedBudgets: nextCarriedBudgets,
+      expectedBudgets: buildExpectedBudgets(nextParticipants),
       soldPlayerIds: nextSoldPlayerIds,
       transferWindow: nextTransferWindow,
       updatedAt: now,
@@ -548,6 +557,7 @@ router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async
     await resultRef.set({
       participants: nextParticipants,
       carriedBudgets: nextCarriedBudgets,
+      expectedBudgets: buildExpectedBudgets(nextParticipants),
       soldPlayerIds: nextSoldPlayerIds,
       transferWindow: nextTransferWindow,
       updatedAt: now,

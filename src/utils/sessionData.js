@@ -77,6 +77,7 @@ export function normalizeSessionRecord(session) {
       ? session.knockoutFormat
       : "semiFinal",
     soldPlayerIds: Array.isArray(session.soldPlayerIds) ? session.soldPlayerIds : [],
+    expectedBudgets: session.expectedBudgets && typeof session.expectedBudgets === "object" ? session.expectedBudgets : {},
     transferWindow: session.transferWindow && typeof session.transferWindow === "object"
       ? {
           phase: typeof session.transferWindow.phase === "string" ? session.transferWindow.phase : "locked",

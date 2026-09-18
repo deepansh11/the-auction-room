@@ -111,6 +111,7 @@ export function normalizeSessionDocument(session) {
     lotClosing: Boolean(session.lotClosing),
     status: typeof session.status === "string" ? session.status : "draw",
     soldPlayerIds: Array.isArray(session.soldPlayerIds) ? session.soldPlayerIds : [],
+    expectedBudgets: session.expectedBudgets && typeof session.expectedBudgets === "object" ? session.expectedBudgets : {},
     transferWindow: session.transferWindow && typeof session.transferWindow === "object"
       ? {
           phase: typeof session.transferWindow.phase === "string" ? session.transferWindow.phase : "locked",

@@ -22,6 +22,7 @@ export async function persistCompletedSessionResult(db, session) {
     groups: normalizedSession.groups || {},
     fixtures: normalizedSession.fixtures || {},
     soldPlayerIds: normalizedSession.soldPlayerIds || [],
+    expectedBudgets: normalizedSession.expectedBudgets || {},
     transferWindow: normalizedSession.transferWindow || {},
     carriedBudgets: normalizedSession.carriedBudgets || {},
     seasonInfo: normalizedSession.seasonInfo || {},
