@@ -200,6 +200,73 @@ export function buildGroupFixtures(groups, leg = "double") {
   return fixtures;
 }
 
+function toCupKey(entry) {
+  if (!entry) return null;
+  if (entry.type === "winner") return `W:${entry.id}`;
+  return entry.name;
+}
+
+export function buildRandomCupBracket(teamNames, knockoutFormat = "quarterFinal") {
+  const teams = shuffleArray((teamNames || []).filter(Boolean));
+  if (teams.length < 2) {
+    return { matchups: [], finalTeams: teams.slice(0, 2), singleLeg: true };
+  }
+
+  if (knockoutFormat === "finalOnly") {
+    return {
+      matchups: [],
+      finalTeams: teams.slice(0, 2),
+      singleLeg: true,
+    };
+  }
+
+  const bracketSize = knockoutFormat === "quarterFinal" ? 8 : 4;
+  const playInTeamCount = teams.length > bracketSize
+    ? Math.min(teams.length, Math.max(0, (teams.length - bracketSize) * 2))
+    : 0;
+  const byeCount = teams.length - playInTeamCount;
+  const byeTeams = teams.slice(0, byeCount).map((name) => ({ type: "team", name }));
+  const playInTeams = teams.slice(byeCount);
+  const playInMatches = [];
+
+  for (let index = 0; index < playInTeams.length; index += 2) {
+    const home = playInTeams[index];
+    const away = playInTeams[index + 1];
+    if (!home || !away) break;
+    playInMatches.push({
+      id: `PI-${index / 2}`,
+      round: "PLAY_IN",
+      homeKey: home,
+      awayKey: away,
+    });
+  }
+
+  const roundEntries = [
+    ...byeTeams,
+    ...playInMatches.map((matchup) => ({ type: "winner", id: matchup.id })),
+  ];
+  const mainRound = knockoutFormat === "quarterFinal" ? "QF" : "SF";
+  const matchups = [...playInMatches];
+
+  for (let index = 0; index < roundEntries.length; index += 2) {
+    const home = roundEntries[index];
+    const away = roundEntries[index + 1];
+    if (!home || !away) break;
+    matchups.push({
+      id: `${mainRound}-${index / 2}`,
+      round: mainRound,
+      homeKey: toCupKey(home),
+      awayKey: toCupKey(away),
+    });
+  }
+
+  return {
+    matchups,
+    finalTeams: [],
+    singleLeg: true,
+  };
+}
+
 /**
  * Build the knockout bracket first-round seedings.
  *

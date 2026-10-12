@@ -3,7 +3,7 @@ import { BallonDorPanel } from "../components/BallonDorPanel.jsx";
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { loadPlayersFromCsv } from "../data/players.js";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
-import { computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
+import { buildRandomCupBracket, computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
 import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateResultTransferWindow, apiUpdateSession } from "../lib/api.js";
 import { downloadSquadImage } from "../utils/squadImage.js";
 import { BTN } from "../utils/styles.js";
@@ -22,15 +22,23 @@ function KnockoutBracket({
   onRefresh,
   refreshing,
   knockoutFormat = "quarterFinal",
+  cupFixture = null,
 }) {
   const groupLabels = Object.keys(groups || {}).sort();
-  const matchups = computeKnockoutMatchups(groupLabels, knockoutFormat);
+  const matchups = Array.isArray(cupFixture?.matchups) && cupFixture.matchups.length > 0
+    ? cupFixture.matchups
+    : computeKnockoutMatchups(groupLabels, knockoutFormat);
+  const singleLeg = cupFixture?.singleLeg !== false;
   const isQF = knockoutFormat === "quarterFinal";
   const isFinalOnly = knockoutFormat === "finalOnly";
 
   function resolveSeed(key) {
-    const pos = parseInt(key[0], 10) - 1;
-    const grpLabel = key.slice(1);
+    if (!key) return "";
+    if (!/\d/.test(key[0])) return key;
+    const match = String(key).match(/^(\d+)(.+)$/);
+    if (!match) return key;
+    const pos = parseInt(match[1], 10) - 1;
+    const grpLabel = match[2];
     const rawTeams = (groups[grpLabel] || []).map((name) => nameMap[name] || name);
     const rawFixtures = (fixturesState[grpLabel] || []).map((fixture) => ({
       ...fixture,
@@ -43,8 +51,8 @@ function KnockoutBracket({
 
   const sfMatches = isQF
     ? [
-        { id: "SF-0", homeKey: matchups[0] ? `W:${matchups[0].id}` : null, awayKey: matchups[1] ? `W:${matchups[1].id}` : null },
-        { id: "SF-1", homeKey: matchups[2] ? `W:${matchups[2].id}` : null, awayKey: matchups[3] ? `W:${matchups[3].id}` : null },
+        { id: "SF-0", homeKey: matchups.filter((matchup) => matchup.round === "QF")[0] ? `W:${matchups.filter((matchup) => matchup.round === "QF")[0].id}` : null, awayKey: matchups.filter((matchup) => matchup.round === "QF")[1] ? `W:${matchups.filter((matchup) => matchup.round === "QF")[1].id}` : null },
+        { id: "SF-1", homeKey: matchups.filter((matchup) => matchup.round === "QF")[2] ? `W:${matchups.filter((matchup) => matchup.round === "QF")[2].id}` : null, awayKey: matchups.filter((matchup) => matchup.round === "QF")[3] ? `W:${matchups.filter((matchup) => matchup.round === "QF")[3].id}` : null },
       ]
     : [];
   const matchRegistry = {};
@@ -72,6 +80,10 @@ function KnockoutBracket({
     const score = knockoutScores[matchId] || {};
     const h1 = Number(score.homeGoals);
     const a1 = Number(score.awayGoals);
+    if (singleLeg) {
+      if (!Number.isFinite(h1) || !Number.isFinite(a1) || h1 === a1) return null;
+      return h1 > a1 ? homeTeam : awayTeam;
+    }
     const h2 = Number(score.leg2HomeGoals);
     const a2 = Number(score.leg2AwayGoals);
     if (!Number.isFinite(h1) || !Number.isFinite(a1) || !Number.isFinite(h2) || !Number.isFinite(a2)) return null;
@@ -131,7 +143,7 @@ function KnockoutBracket({
     const a1 = Number(score.awayGoals);
     const h2 = Number(score.leg2HomeGoals);
     const a2 = Number(score.leg2AwayGoals);
-    const hasAgg = !homeTBD && !awayTBD && Number.isFinite(h1) && Number.isFinite(a1) && Number.isFinite(h2) && Number.isFinite(a2);
+    const hasAgg = !singleLeg && !homeTBD && !awayTBD && Number.isFinite(h1) && Number.isFinite(a1) && Number.isFinite(h2) && Number.isFinite(a2);
     const rowStyle = (team, tbd) => ({
       display: "flex",
       alignItems: "center",
@@ -155,7 +167,7 @@ function KnockoutBracket({
 
     return React.createElement("div", { style: { minWidth } },
       label && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 10, color: "#555", letterSpacing: 2, marginBottom: 4 } }, label),
-      legLabel("LEG 1"),
+      !singleLeg && legLabel("LEG 1"),
       React.createElement("div", { style: rowStyle(home, homeTBD) },
         React.createElement("span", {
           style: {
@@ -186,36 +198,38 @@ function KnockoutBracket({
         }, awayTBD ? "TBD" : away),
         !awayTBD && React.createElement(ScoreInput, { matchId, side: "awayGoals", value: score.awayGoals })
       ),
-      legLabel("LEG 2"),
-      React.createElement("div", { style: rowStyle(away, awayTBD) },
-        React.createElement("span", {
-          style: {
-            flex: 1,
-            fontFamily: "'Exo 2'",
-            fontSize: 12,
-            color: awayTBD ? "#333" : winner === away ? "#FFD700" : "#ccc",
-            fontWeight: winner === away ? 700 : 400,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }
-        }, awayTBD ? "TBD" : away),
-        !awayTBD && React.createElement(ScoreInput, { matchId, side: "leg2HomeGoals", value: score.leg2HomeGoals })
-      ),
-      React.createElement("div", { style: rowStyle(home, homeTBD) },
-        React.createElement("span", {
-          style: {
-            flex: 1,
-            fontFamily: "'Exo 2'",
-            fontSize: 12,
-            color: homeTBD ? "#333" : winner === home ? "#FFD700" : "#ccc",
-            fontWeight: winner === home ? 700 : 400,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }
-        }, homeTBD ? "TBD" : home),
-        !homeTBD && React.createElement(ScoreInput, { matchId, side: "leg2AwayGoals", value: score.leg2AwayGoals })
+      !singleLeg && React.createElement(React.Fragment, null,
+        legLabel("LEG 2"),
+        React.createElement("div", { style: rowStyle(away, awayTBD) },
+          React.createElement("span", {
+            style: {
+              flex: 1,
+              fontFamily: "'Exo 2'",
+              fontSize: 12,
+              color: awayTBD ? "#333" : winner === away ? "#FFD700" : "#ccc",
+              fontWeight: winner === away ? 700 : 400,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }
+          }, awayTBD ? "TBD" : away),
+          !awayTBD && React.createElement(ScoreInput, { matchId, side: "leg2HomeGoals", value: score.leg2HomeGoals })
+        ),
+        React.createElement("div", { style: rowStyle(home, homeTBD) },
+          React.createElement("span", {
+            style: {
+              flex: 1,
+              fontFamily: "'Exo 2'",
+              fontSize: 12,
+              color: homeTBD ? "#333" : winner === home ? "#FFD700" : "#ccc",
+              fontWeight: winner === home ? 700 : 400,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }
+          }, homeTBD ? "TBD" : home),
+          !homeTBD && React.createElement(ScoreInput, { matchId, side: "leg2AwayGoals", value: score.leg2AwayGoals })
+        )
       ),
       hasAgg && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#888", marginTop: 4, letterSpacing: 1, textAlign: "center" } }, `AGG: ${home} ${h1 + a2} – ${a1 + h2} ${away}`),
       winner && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 9, color: "#FFD700", marginTop: 2, letterSpacing: 1 } }, `→ ${winner} advances`)
@@ -232,11 +246,15 @@ function KnockoutBracket({
 
   const finalLabels = groupLabels;
   const singleGroupFinalOnly = isFinalOnly && finalLabels.length === 1;
-  const finalHomeKey = isQF ? "W:SF-0" : isFinalOnly ? `1${finalLabels[0] || "A"}` : (matchups[0] ? `W:${matchups[0].id}` : null);
+  const finalHomeKey = isQF
+    ? "W:SF-0"
+    : isFinalOnly
+      ? (cupFixture?.finalTeams?.[0] || `1${finalLabels[0] || "A"}`)
+      : (matchups[0] ? `W:${matchups[0].id}` : null);
   const finalAwayKey = isQF
     ? "W:SF-1"
     : isFinalOnly
-      ? (singleGroupFinalOnly ? `2${finalLabels[0] || "A"}` : `1${finalLabels[1] || "B"}`)
+      ? (cupFixture?.finalTeams?.[1] || (singleGroupFinalOnly ? `2${finalLabels[0] || "A"}` : `1${finalLabels[1] || "B"}`))
       : (matchups[matchups.length - 1] ? `W:${matchups[matchups.length - 1].id}` : null);
   const finalHome = finalHomeKey ? resolveTeam(finalHomeKey) : null;
   const finalAway = finalAwayKey ? resolveTeam(finalAwayKey) : null;
@@ -245,8 +263,8 @@ function KnockoutBracket({
   const finalScore = knockoutScores.FINAL || {};
   const fh1 = Number(finalScore.homeGoals);
   const fa1 = Number(finalScore.awayGoals);
-  const finalWinner = !finalHomeTBD && !finalAwayTBD && Number.isFinite(fh1) && Number.isFinite(fa1)
-    ? (fh1 > fa1 ? finalHome : fa1 > fh1 ? finalAway : null)
+  const finalWinner = !finalHomeTBD && !finalAwayTBD && Number.isFinite(fh1) && Number.isFinite(fa1) && fh1 !== fa1
+    ? (fh1 > fa1 ? finalHome : finalAway)
     : null;
   const finalRowStyle = (team, tbd) => ({
     display: "flex",
@@ -444,12 +462,18 @@ function readCupFixtureConfig(fixtures, fallbackFormat = "semiFinal") {
     return {
       enabled: true,
       format: normalizeCupFormat(rawCup.format, fallbackFormat),
+      singleLeg: rawCup.singleLeg !== false,
+      matchups: Array.isArray(rawCup.matchups) ? rawCup.matchups : [],
+      finalTeams: Array.isArray(rawCup.finalTeams) ? rawCup.finalTeams.filter(Boolean).slice(0, 2) : [],
     };
   }
   if (knockoutScores && typeof knockoutScores === "object" && Object.keys(knockoutScores).length > 0) {
     return {
       enabled: true,
       format: normalizeCupFormat(fallbackFormat),
+      singleLeg: false,
+      matchups: [],
+      finalTeams: [],
     };
   }
   return null;
@@ -466,42 +490,12 @@ function splitFixtureState(fixtures, fallbackFormat = "semiFinal") {
 }
 
 function inferCupFixtureConfig(groups, participants = []) {
-  const labels = Object.keys(groups || {}).sort();
-  if (labels.length < 1) return null;
-
-  const groupSizes = labels
-    .map((label) => (Array.isArray(groups?.[label]) ? groups[label].filter(Boolean).length : 0))
-    .filter((size) => size > 0);
-  if (groupSizes.length < 1) return null;
-
   const participantCount = Array.isArray(participants) && participants.length > 0
     ? participants.length
-    : groupSizes.reduce((sum, size) => sum + size, 0);
-  const minGroupSize = Math.min(...groupSizes);
-
-  if (labels.length === 1) {
-    if (minGroupSize >= 8 && participantCount >= 8) {
-      return { enabled: true, format: "quarterFinal" };
-    }
-    if (minGroupSize >= 4 && participantCount >= 4) {
-      return { enabled: true, format: "semiFinal" };
-    }
-    if (minGroupSize >= 2 && participantCount >= 2) {
-      return { enabled: true, format: "finalOnly" };
-    }
-    return null;
-  }
-
-  if (labels.length === 2) {
-    if (minGroupSize >= 4 && participantCount >= 8) {
-      return { enabled: true, format: "quarterFinal" };
-    }
-    if (minGroupSize >= 2 && participantCount >= 4) {
-      return { enabled: true, format: "semiFinal" };
-    }
-    return { enabled: true, format: "finalOnly" };
-  }
-
+    : Object.values(groups || {}).reduce((sum, members) => sum + ((Array.isArray(members) ? members.filter(Boolean).length : 0)), 0);
+  if (participantCount >= 8) return { enabled: true, format: "quarterFinal", singleLeg: true };
+  if (participantCount >= 4) return { enabled: true, format: "semiFinal", singleLeg: true };
+  if (participantCount >= 2) return { enabled: true, format: "finalOnly", singleLeg: true };
   return null;
 }
 
@@ -1326,12 +1320,19 @@ export function ResultsScreen({
     if (!auctionResultId || !user?.token || !suggestedCupFixture) return;
     setStartingCupFixture(true);
     try {
+      const participantNames = (participants || []).map((participant) => String(participant?.name || "").trim()).filter(Boolean);
+      const randomBracket = buildRandomCupBracket(participantNames, suggestedCupFixture.format);
+      const nextCupFixture = {
+        ...suggestedCupFixture,
+        ...randomBracket,
+        singleLeg: true,
+      };
       await apiSaveFixtures(auctionResultId, {
         ...fixturesState,
-        _cup: suggestedCupFixture,
+        _cup: nextCupFixture,
         _knockout: {},
       }, user.token);
-      setCupFixture(suggestedCupFixture);
+      setCupFixture(nextCupFixture);
       setKnockoutScores({});
       setKnockoutPublished(false);
     } catch (err) {
@@ -1339,7 +1340,7 @@ export function ResultsScreen({
     } finally {
       setStartingCupFixture(false);
     }
-  }, [auctionResultId, fixturesState, suggestedCupFixture, user?.token]);
+  }, [auctionResultId, fixturesState, participants, suggestedCupFixture, user?.token]);
 
   const handleStartTransfer = async () => {
     if (!isHost || !onStartTransferWindow || startingTransferWindow || !firstRoundComplete) return;
@@ -1804,6 +1805,7 @@ export function ResultsScreen({
           nameMap,
           isHost,
           knockoutFormat: cupFixture.format,
+          cupFixture,
           publishing: knockoutPublishing,
           published: knockoutPublished,
           onScoreChange: isHost ? (matchId, side, value) => {
