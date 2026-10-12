@@ -213,7 +213,7 @@ export function buildGroupFixtures(groups, leg = "double") {
 export function computeKnockoutMatchups(groupLabels, knockoutFormat = "quarterFinal") {
   const labels = (groupLabels || []).filter(Boolean).sort();
   const n = labels.length;
-  if (n < 2) return [];
+  if (n < 1) return [];
 
   if (knockoutFormat === "finalOnly") {
     // No pre-final round; the Final is rendered directly with 1st from each half.
@@ -221,6 +221,17 @@ export function computeKnockoutMatchups(groupLabels, knockoutFormat = "quarterFi
   }
 
   if (knockoutFormat === "quarterFinal") {
+    if (n === 1) {
+      const [a] = labels;
+      return [
+        { id: "PI-0", round: "PLAY_IN", homeKey: `7${a}`, awayKey: `10${a}` },
+        { id: "PI-1", round: "PLAY_IN", homeKey: `8${a}`, awayKey: `9${a}` },
+        { id: "QF-0", round: "QF", homeKey: `1${a}`, awayKey: "W:PI-1" },
+        { id: "QF-1", round: "QF", homeKey: `4${a}`, awayKey: `5${a}` },
+        { id: "QF-2", round: "QF", homeKey: `2${a}`, awayKey: "W:PI-0" },
+        { id: "QF-3", round: "QF", homeKey: `3${a}`, awayKey: `6${a}` },
+      ];
+    }
     // World Cup crossover (designed for 2 groups A and B):
     // Left bracket:  QF-0: 1A v 4B, QF-1: 2B v 3A  →  SF-0
     // Right bracket: QF-2: 1B v 4A, QF-3: 2A v 3B  →  SF-1
@@ -230,6 +241,14 @@ export function computeKnockoutMatchups(groupLabels, knockoutFormat = "quarterFi
       { id: "QF-1", round: "QF", homeKey: `2${b}`, awayKey: `3${a}` },
       { id: "QF-2", round: "QF", homeKey: `1${b}`, awayKey: `4${a}` },
       { id: "QF-3", round: "QF", homeKey: `2${a}`, awayKey: `3${b}` },
+    ];
+  }
+
+  if (n === 1) {
+    const [a] = labels;
+    return [
+      { id: "R16-0", round: "R16", homeKey: `1${a}`, awayKey: `4${a}` },
+      { id: "R16-1", round: "R16", homeKey: `2${a}`, awayKey: `3${a}` },
     ];
   }
 

@@ -231,8 +231,13 @@ function KnockoutBracket({
   }
 
   const finalLabels = groupLabels;
+  const singleGroupFinalOnly = isFinalOnly && finalLabels.length === 1;
   const finalHomeKey = isQF ? "W:SF-0" : isFinalOnly ? `1${finalLabels[0] || "A"}` : (matchups[0] ? `W:${matchups[0].id}` : null);
-  const finalAwayKey = isQF ? "W:SF-1" : isFinalOnly ? `1${finalLabels[1] || "B"}` : (matchups[matchups.length - 1] ? `W:${matchups[matchups.length - 1].id}` : null);
+  const finalAwayKey = isQF
+    ? "W:SF-1"
+    : isFinalOnly
+      ? (singleGroupFinalOnly ? `2${finalLabels[0] || "A"}` : `1${finalLabels[1] || "B"}`)
+      : (matchups[matchups.length - 1] ? `W:${matchups[matchups.length - 1].id}` : null);
   const finalHome = finalHomeKey ? resolveTeam(finalHomeKey) : null;
   const finalAway = finalAwayKey ? resolveTeam(finalAwayKey) : null;
   const finalHomeTBD = !finalHome || finalHome.startsWith("W:");
@@ -286,7 +291,8 @@ function KnockoutBracket({
   if (isFinalOnly) {
     bracketBody = React.createElement("div", { style: { display: "flex", justifyContent: "center" } }, centerFinal);
   } else if (isQF) {
-    const allQFs = [...matchups.slice(0, 2), ...matchups.slice(2, 4)];
+    const playInMatches = matchups.filter((matchup) => matchup.round === "PLAY_IN");
+    const allQFs = matchups.filter((matchup) => matchup.round === "QF");
     const [sfLeft, sfRight] = sfMatches;
     const borderColor = "#FFD70033";
     const roundLabel = (text) => React.createElement("div", {
@@ -294,6 +300,19 @@ function KnockoutBracket({
     }, text);
 
     bracketBody = React.createElement("div", { style: { display: "flex", flexDirection: "column" } },
+      playInMatches.length > 0 && React.createElement(React.Fragment, null,
+        roundLabel("PLAY-IN ROUND"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, marginBottom: 10 } },
+          playInMatches.map((matchup) => React.createElement(MatchBox, {
+            key: matchup.id,
+            matchId: matchup.id,
+            homeKey: matchup.homeKey,
+            awayKey: matchup.awayKey,
+            label: `PLAY-IN · ${matchup.homeKey} v ${matchup.awayKey}`,
+            minWidth: 0,
+          }))
+        )
+      ),
       roundLabel("QUARTER FINALS"),
       React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 } },
         allQFs.map((matchup) => React.createElement(MatchBox, {
@@ -448,17 +467,30 @@ function splitFixtureState(fixtures, fallbackFormat = "semiFinal") {
 
 function inferCupFixtureConfig(groups, participants = []) {
   const labels = Object.keys(groups || {}).sort();
-  if (labels.length < 2) return null;
+  if (labels.length < 1) return null;
 
   const groupSizes = labels
     .map((label) => (Array.isArray(groups?.[label]) ? groups[label].filter(Boolean).length : 0))
     .filter((size) => size > 0);
-  if (groupSizes.length < 2) return null;
+  if (groupSizes.length < 1) return null;
 
   const participantCount = Array.isArray(participants) && participants.length > 0
     ? participants.length
     : groupSizes.reduce((sum, size) => sum + size, 0);
   const minGroupSize = Math.min(...groupSizes);
+
+  if (labels.length === 1) {
+    if (minGroupSize >= 8 && participantCount >= 8) {
+      return { enabled: true, format: "quarterFinal" };
+    }
+    if (minGroupSize >= 4 && participantCount >= 4) {
+      return { enabled: true, format: "semiFinal" };
+    }
+    if (minGroupSize >= 2 && participantCount >= 2) {
+      return { enabled: true, format: "finalOnly" };
+    }
+    return null;
+  }
 
   if (labels.length === 2) {
     if (minGroupSize >= 4 && participantCount >= 8) {
