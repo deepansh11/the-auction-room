@@ -411,6 +411,74 @@ function KnockoutBracket({
   );
 }
 
+const CUP_FORMATS = ["semiFinal", "quarterFinal", "finalOnly"];
+
+function normalizeCupFormat(value, fallback = "semiFinal") {
+  return CUP_FORMATS.includes(value) ? value : fallback;
+}
+
+function readCupFixtureConfig(fixtures, fallbackFormat = "semiFinal") {
+  const knockoutScores = fixtures?._knockout;
+  const rawCup = fixtures?._cup;
+  if (rawCup && typeof rawCup === "object") {
+    if (rawCup.enabled === false) return null;
+    return {
+      enabled: true,
+      format: normalizeCupFormat(rawCup.format, fallbackFormat),
+    };
+  }
+  if (knockoutScores && typeof knockoutScores === "object" && Object.keys(knockoutScores).length > 0) {
+    return {
+      enabled: true,
+      format: normalizeCupFormat(fallbackFormat),
+    };
+  }
+  return null;
+}
+
+function splitFixtureState(fixtures, fallbackFormat = "semiFinal") {
+  const next = fixtures && typeof fixtures === "object" ? fixtures : {};
+  const { _knockout, _cup, ...groupFixtures } = next;
+  return {
+    groupFixtures,
+    knockoutScores: _knockout && typeof _knockout === "object" ? _knockout : {},
+    cupFixture: readCupFixtureConfig(next, fallbackFormat),
+  };
+}
+
+function inferCupFixtureConfig(groups, participants = []) {
+  const labels = Object.keys(groups || {}).sort();
+  if (labels.length < 2) return null;
+
+  const groupSizes = labels
+    .map((label) => (Array.isArray(groups?.[label]) ? groups[label].filter(Boolean).length : 0))
+    .filter((size) => size > 0);
+  if (groupSizes.length < 2) return null;
+
+  const participantCount = Array.isArray(participants) && participants.length > 0
+    ? participants.length
+    : groupSizes.reduce((sum, size) => sum + size, 0);
+  const minGroupSize = Math.min(...groupSizes);
+
+  if (labels.length === 2) {
+    if (minGroupSize >= 4 && participantCount >= 8) {
+      return { enabled: true, format: "quarterFinal" };
+    }
+    if (minGroupSize >= 2 && participantCount >= 4) {
+      return { enabled: true, format: "semiFinal" };
+    }
+    return { enabled: true, format: "finalOnly" };
+  }
+
+  return null;
+}
+
+function getCupFormatLabel(format) {
+  if (format === "quarterFinal") return "Quarter Finals";
+  if (format === "finalOnly") return "Final Only";
+  return "Semi Finals";
+}
+
 function buildNameMap(participants, groups) {
   const realNames = new Set((participants || []).map((participant) => participant.name));
   const nameMap = {};
@@ -821,16 +889,14 @@ export function ResultsScreen({
   const [historySectionFilter, setHistorySectionFilter] = React.useState("ALL");
   const [matchTeamFilter, setMatchTeamFilter] = React.useState("ALL");
   const [matchLegFilter, setMatchLegFilter] = React.useState("ALL");
-  const [fixturesState, setFixturesState] = React.useState(() => {
-    const next = fixtures || {};
-    const { _knockout, ...groupFixtures } = next;
-    return groupFixtures;
-  });
+  const [fixturesState, setFixturesState] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).groupFixtures);
   const [catalogPlayers, setCatalogPlayers] = React.useState([]);
   const [savingFixtureId, setSavingFixtureId] = React.useState("");
-  const [knockoutScores, setKnockoutScores] = React.useState(() => (fixtures || {})._knockout || {});
+  const [knockoutScores, setKnockoutScores] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).knockoutScores);
+  const [cupFixture, setCupFixture] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).cupFixture);
   const [knockoutPublishing, setKnockoutPublishing] = React.useState(false);
   const [knockoutPublished, setKnockoutPublished] = React.useState(false);
+  const [startingCupFixture, setStartingCupFixture] = React.useState(false);
   const [loadingLatest, setLoadingLatest] = React.useState(false);
   const [startingTransferWindow, setStartingTransferWindow] = React.useState(false);
   const [deadlineDateDraft, setDeadlineDateDraft] = React.useState("");
@@ -852,11 +918,11 @@ export function ResultsScreen({
   const nameMap = React.useMemo(() => buildNameMap(participants, groups), [participants, groups]);
 
   React.useEffect(() => {
-    const next = fixtures || {};
-    const { _knockout, ...groupFixtures } = next;
-    setFixturesState(groupFixtures);
-    setKnockoutScores((prev) => Object.keys(prev).length > 0 ? prev : (_knockout || {}));
-  }, [fixtures]);
+    const next = splitFixtureState(fixtures, knockoutFormat);
+    setFixturesState(next.groupFixtures);
+    setCupFixture(next.cupFixture);
+    setKnockoutScores((prev) => Object.keys(prev).length > 0 ? prev : next.knockoutScores);
+  }, [fixtures, knockoutFormat]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1036,17 +1102,16 @@ export function ResultsScreen({
     setLoadingLatest(true);
     try {
       const latest = await apiGetFixtures(auctionResultId, user.token);
-      const { _knockout, ...groupFixtures } = latest;
-      setFixturesState(groupFixtures);
-      if (_knockout && typeof _knockout === "object") {
-        setKnockoutScores(_knockout);
-      }
+      const next = splitFixtureState(latest, knockoutFormat);
+      setFixturesState(next.groupFixtures);
+      setCupFixture(next.cupFixture);
+      setKnockoutScores(next.knockoutScores);
     } catch (_) {
       // Keep the existing UI state if refresh fails.
     } finally {
       setLoadingLatest(false);
     }
-  }, [auctionResultId, user?.token]);
+  }, [auctionResultId, knockoutFormat, user?.token]);
 
   React.useEffect(() => {
     loadLatestFixtures();
@@ -1192,7 +1257,11 @@ export function ResultsScreen({
             const currentFixture = (next[groupLabel] || []).find((fixture) => fixture.id === fixtureId);
             if (!currentFixture) return;
             if (isHost) {
-              await apiSaveFixtures(auctionResultId, { ...next, _knockout: knockoutScores }, user?.token);
+              await apiSaveFixtures(auctionResultId, {
+                ...next,
+                ...(cupFixture ? { _cup: cupFixture } : {}),
+                _knockout: knockoutScores,
+              }, user?.token);
             } else {
               await apiSaveFixtureScore(
                 auctionResultId,
@@ -1215,6 +1284,30 @@ export function ResultsScreen({
       return next;
     });
   };
+
+  const suggestedCupFixture = React.useMemo(
+    () => inferCupFixtureConfig(resolvedGroups, participants),
+    [participants, resolvedGroups]
+  );
+
+  const handleStartCupFixture = React.useCallback(async () => {
+    if (!auctionResultId || !user?.token || !suggestedCupFixture) return;
+    setStartingCupFixture(true);
+    try {
+      await apiSaveFixtures(auctionResultId, {
+        ...fixturesState,
+        _cup: suggestedCupFixture,
+        _knockout: {},
+      }, user.token);
+      setCupFixture(suggestedCupFixture);
+      setKnockoutScores({});
+      setKnockoutPublished(false);
+    } catch (err) {
+      alert(`Failed to start cup fixture: ${err.message}`);
+    } finally {
+      setStartingCupFixture(false);
+    }
+  }, [auctionResultId, fixturesState, suggestedCupFixture, user?.token]);
 
   const handleStartTransfer = async () => {
     if (!isHost || !onStartTransferWindow || startingTransferWindow || !firstRoundComplete) return;
@@ -1642,13 +1735,43 @@ export function ResultsScreen({
             )
           );
         }),
-        Object.keys(groups).length >= 1 && React.createElement(KnockoutBracket, {
+        groupsEnabled && !cupFixture && React.createElement("div", { style: { ...surfaceCard, padding: 20 } },
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
+            React.createElement("div", null,
+              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#FFD700", letterSpacing: 2 } }, "CUP FIXTURE"),
+              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", marginTop: 4 } },
+                suggestedCupFixture
+                  ? `No cup fixture yet. Starting now will create ${getCupFormatLabel(suggestedCupFixture.format)}.`
+                  : "No cup fixture available for this table setup yet."
+              )
+            ),
+            isHost
+              ? React.createElement("button", {
+                  onClick: handleStartCupFixture,
+                  disabled: startingCupFixture || !suggestedCupFixture,
+                  style: {
+                    background: "linear-gradient(135deg,#FFD700,#FFA500)",
+                    color: "#000",
+                    border: "none",
+                    borderRadius: 999,
+                    padding: "10px 18px",
+                    cursor: startingCupFixture || !suggestedCupFixture ? "default" : "pointer",
+                    fontFamily: "'Bebas Neue'",
+                    fontSize: 14,
+                    letterSpacing: 1,
+                    opacity: startingCupFixture || !suggestedCupFixture ? 0.6 : 1,
+                  }
+                }, startingCupFixture ? "STARTING CUP…" : "START CUP FIXTURE")
+              : React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#718096" } }, "Only the host can start the cup fixture.")
+          )
+        ),
+        cupFixture && Object.keys(groups).length >= 1 && React.createElement(KnockoutBracket, {
           groups,
           fixturesState,
           knockoutScores,
           nameMap,
           isHost,
-          knockoutFormat,
+          knockoutFormat: cupFixture.format,
           publishing: knockoutPublishing,
           published: knockoutPublished,
           onScoreChange: isHost ? (matchId, side, value) => {
@@ -1662,7 +1785,11 @@ export function ResultsScreen({
             if (!auctionResultId || !user?.token) return;
             setKnockoutPublishing(true);
             try {
-              await apiSaveFixtures(auctionResultId, { ...fixturesState, _knockout: knockoutScores }, user.token);
+              await apiSaveFixtures(auctionResultId, {
+                ...fixturesState,
+                ...(cupFixture ? { _cup: cupFixture } : {}),
+                _knockout: knockoutScores,
+              }, user.token);
               setKnockoutPublished(true);
             } catch (_) {
               // Surface stays local until the next publish attempt.
@@ -1797,24 +1924,23 @@ export function ResultsScreen({
                       { style: { display: "flex", flexDirection: "column", gap: 10 } },
                       teamRows.map(({ teamName, color, scoreKey, side }) => React.createElement(
                         "div",
-                        { key: `${fixture.id}-${scoreKey}`, style: { display: "grid", gridTemplateColumns: "34px 1fr auto", gap: 10, alignItems: "center" } },
+                        { key: `${fixture.id}-${scoreKey}`, style: { display: "grid", gridTemplateColumns: "34px auto", gap: 10, alignItems: "center" } },
                         React.createElement(TeamBadge, { name: teamName, color, small: false }),
-                        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 1 } }, teamName),
                         canEditFixture
                           ? React.createElement("input", {
                               type: "number",
                               min: 0,
                               value: fixture[scoreKey] ?? "",
                               onChange: (e) => handleFixtureGoalChange(section.groupLabel, fixture.id, side, e.target.value),
-                              style: { width: 52, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 20, textAlign: "center", padding: "6px 0" },
+                              style: { width: 52, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 20, textAlign: "center", padding: "6px 0", justifySelf: "end" },
                             })
-                          : React.createElement("div", { style: { width: 52, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 20, textAlign: "center", padding: "6px 0" } }, fixture[scoreKey] ?? "–")
+                          : React.createElement("div", { style: { width: 52, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 20, textAlign: "center", padding: "6px 0", justifySelf: "end" } }, fixture[scoreKey] ?? "–")
                       ))
                     ),
                     React.createElement("div", { style: { textAlign: "right" } },
                       React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, savingFixtureId === fixture.id ? "Syncing…" : "Synced"),
                       React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end", marginTop: 10 } },
-                        played && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#FFD700", letterSpacing: 2 } }, Number(fixture.homeGoals) > Number(fixture.awayGoals) ? fixture.home : Number(fixture.homeGoals) < Number(fixture.awayGoals) ? fixture.away : "DRAW"),
+                        played && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#FFD700", letterSpacing: 2 } }, Number(fixture.homeGoals) > Number(fixture.awayGoals) ? `${fixture.home} (WIN)` : Number(fixture.homeGoals) < Number(fixture.awayGoals) ? `${fixture.away} (WIN)` : "DRAW"),
                         canEditFixture && React.createElement("button", {
                           onClick: () => setSelectedUploadFixture({ ...fixture, groupLabel: section.groupLabel }),
                           style: {

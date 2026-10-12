@@ -36,7 +36,6 @@ export function SetupScreen({ user, onStart, onBackToDiscover }) {
   const [groupsEnabled, setGroupsEnabled] = React.useState(true);
   const [groupCount, setGroupCount] = React.useState(2);
   const [fixtureLeg, setFixtureLeg] = React.useState("single");
-  const [knockoutFormat, setKnockoutFormat] = React.useState("quarterFinal");
   const [showAdvanced, setShowAdvanced] = React.useState(true);
   const [showShare, setShowShare] = React.useState(false);
   const [sessionData, setSessionData] = React.useState(null);
@@ -329,27 +328,9 @@ export function SetupScreen({ user, onStart, onBackToDiscover }) {
             React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#6d7d73" } },
               fixtureLeg === "double" ? "Home + Away for every match" : "One match per pair")
           ),
-          // KNOCKOUT FORMAT
-          React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, marginTop:8, width:"100%", flexWrap:"wrap" } },
-            React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#8ea0ba" } }, "KNOCKOUT FORMAT"),
-            [
-              { key: "semiFinal",    label: "SEMI FINALS",    desc: `top ${Math.max(1, Math.round(4/groupCount))}/group` },
-              { key: "quarterFinal", label: "QUARTER FINALS", desc: `top 4/group` },
-              { key: "finalOnly",    label: "FINAL ONLY",     desc: `top 1/group` },
-            ].map(({ key, label, desc }) =>
-              React.createElement("button", { key, type:"button", onClick: () => setKnockoutFormat(key), style:{
-                background: knockoutFormat===key ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "rgba(8,18,13,.92)",
-                color:      knockoutFormat===key ? "#07110c"    : "#c6d2ca",
-                border:    `1px solid ${knockoutFormat===key ? "rgba(79,195,247,.45)" : "rgba(143,231,192,.14)"}`,
-                borderRadius:6, padding:"4px 12px", cursor:"pointer",
-                fontFamily:"'Bebas Neue'", fontSize:13
-              }},
-                `${label}`,
-                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, fontWeight:700,
-                  color: knockoutFormat===key ? "#07110c88" : "#6d7d73",
-                  marginLeft:5 } }, `(${desc})`)
-              )
-            )
+          React.createElement("div", { style:{ marginTop:8, width:"100%" } },
+            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#8ea0ba" } },
+              "Cup fixtures are optional and can be started later from the Tables screen.")
           )
         ),
         React.createElement("div", { style:{ display:"flex", justifyContent:"flex-start", gap:10, flexWrap:"wrap", marginTop:14 } },
@@ -490,7 +471,6 @@ export function SetupScreen({ user, onStart, onBackToDiscover }) {
             groupsEnabled,
             groupCount,
             fixtureLeg,
-            knockoutFormat,
           };
 
           try {
