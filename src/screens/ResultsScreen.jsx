@@ -1136,10 +1136,11 @@ export function ResultsScreen({
   const firstRoundComplete = React.useMemo(() => {
     if (!groupsEnabled || Object.keys(resolvedGroups).length === 0) return false;
     return Object.entries(resolvedGroups).every(([label, teams]) => {
-      const firstLegLimit = getBaseRoundCount(teams.length);
-      if (firstLegLimit === 0) return false;
-      const relevant = (resolvedFixturesByGroup[label] || []).filter((fixture) => Number(fixture.round || 0) <= firstLegLimit);
-      return relevant.length > 0 && relevant.every(isPlayedFixture);
+      const cleanTeams = (teams || []).filter(Boolean);
+      const requiredMatchesPerTeam = Math.max(cleanTeams.length - 1, 0);
+      if (requiredMatchesPerTeam === 0) return false;
+      const table = computeGroupTable(cleanTeams, resolvedFixturesByGroup[label] || []);
+      return table.length === cleanTeams.length && table.every((row) => Number(row.played || 0) >= requiredMatchesPerTeam);
     });
   }, [groupsEnabled, resolvedGroups, resolvedFixturesByGroup]);
 

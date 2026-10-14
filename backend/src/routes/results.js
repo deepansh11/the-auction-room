@@ -141,11 +141,18 @@ function isFirstRoundComplete(result) {
 
   return labels.every((label) => {
     const teams = Array.isArray(groups[label]) ? groups[label].filter(Boolean) : [];
-    const firstLegLimit = getBaseRoundCount(teams.length);
-    if (firstLegLimit === 0) return false;
     const groupFixtures = Array.isArray(fixtures[label]) ? fixtures[label] : [];
-    const relevantFixtures = groupFixtures.filter((fixture) => Number(fixture?.round || 0) <= firstLegLimit);
-    return relevantFixtures.length > 0 && relevantFixtures.every(isPlayedFixture);
+    const requiredMatchesPerTeam = Math.max(teams.length - 1, 0);
+    if (requiredMatchesPerTeam === 0) return false;
+
+    const playedByTeam = Object.fromEntries(teams.map((team) => [team, 0]));
+    groupFixtures.forEach((fixture) => {
+      if (!isPlayedFixture(fixture)) return;
+      if (playedByTeam[fixture.home] !== undefined) playedByTeam[fixture.home] += 1;
+      if (playedByTeam[fixture.away] !== undefined) playedByTeam[fixture.away] += 1;
+    });
+
+    return teams.every((team) => Number(playedByTeam[team] || 0) >= requiredMatchesPerTeam);
   });
 }
 

@@ -605,7 +605,11 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
     }
 
     const listingDeadlineAt = Number(session.transferWindow?.listingDeadlineAt || sourceResult.transferWindow?.listingDeadlineAt || 0);
-    if (Number.isFinite(listingDeadlineAt) && listingDeadlineAt > 0 && Date.now() < listingDeadlineAt) {
+    const everyoneCompletedListings = participants.every((participant) => {
+      const soldPlayers = Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [];
+      return soldPlayers.length >= requiredSalesMin && soldPlayers.length <= requiredSalesMax;
+    });
+    if (Number.isFinite(listingDeadlineAt) && listingDeadlineAt > 0 && Date.now() < listingDeadlineAt && !everyoneCompletedListings) {
       return res.status(409).json({ error: "Wait until the transfer listing deadline ends before opening the market" });
     }
 
