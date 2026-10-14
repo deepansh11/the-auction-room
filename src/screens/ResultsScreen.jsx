@@ -479,13 +479,30 @@ function readCupFixtureConfig(fixtures, fallbackFormat = "semiFinal") {
   return null;
 }
 
+function readPenaltyAdjustments(fixtures) {
+  const rawPenalties = fixtures?._penalties;
+  if (!rawPenalties || typeof rawPenalties !== "object" || Array.isArray(rawPenalties)) return {};
+  return Object.fromEntries(
+    Object.entries(rawPenalties)
+      .map(([teamName, penalty]) => [
+        teamName,
+        {
+          points: Math.max(0, Number(penalty?.points || 0)),
+          gd: Math.max(0, Number(penalty?.gd || 0)),
+        },
+      ])
+      .filter(([, penalty]) => penalty.points > 0 || penalty.gd > 0)
+  );
+}
+
 function splitFixtureState(fixtures, fallbackFormat = "semiFinal") {
   const next = fixtures && typeof fixtures === "object" ? fixtures : {};
-  const { _knockout, _cup, ...groupFixtures } = next;
+  const { _knockout, _cup, _penalties, ...groupFixtures } = next;
   return {
     groupFixtures,
     knockoutScores: _knockout && typeof _knockout === "object" ? _knockout : {},
     cupFixture: readCupFixtureConfig(next, fallbackFormat),
+    penaltyAdjustments: readPenaltyAdjustments(next),
   };
 }
 
@@ -546,7 +563,29 @@ function formatRelativeTime(timestamp) {
   return `Updated ${days}d ago`;
 }
 
-function buildLeagueTable(teams, fixtures, participantMeta) {
+function applyPenaltyAdjustments(rows, penalties = {}) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((entry) => {
+      const rawPenalty = penalties?.[entry.name];
+      const penaltyPoints = Math.max(0, Number(rawPenalty?.points || 0));
+      const penaltyGd = Math.max(0, Number(rawPenalty?.gd || 0));
+      return {
+        ...entry,
+        penaltyPoints,
+        penaltyGd,
+        gd: Number(entry.gd || 0) - penaltyGd,
+        points: Number(entry.points || 0) - penaltyPoints,
+      };
+    })
+    .sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      if (b.gd !== a.gd) return b.gd - a.gd;
+      if (b.gf !== a.gf) return b.gf - a.gf;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function buildLeagueTable(teams, fixtures, participantMeta, penalties = {}) {
   const tableMap = new Map();
   (teams || []).forEach((team) => {
     tableMap.set(team, {
@@ -603,14 +642,10 @@ function buildLeagueTable(teams, fixtures, participantMeta) {
       }
     });
 
-  return Array.from(tableMap.values())
-    .map((entry) => ({ ...entry, gd: entry.gf - entry.ga, form: entry.form.slice(-5) }))
-    .sort((a, b) => {
-      if (b.points !== a.points) return b.points - a.points;
-      if (b.gd !== a.gd) return b.gd - a.gd;
-      if (b.gf !== a.gf) return b.gf - a.gf;
-      return a.name.localeCompare(b.name);
-    });
+  return applyPenaltyAdjustments(
+    Array.from(tableMap.values()).map((entry) => ({ ...entry, gd: entry.gf - entry.ga, form: entry.form.slice(-5) })),
+    penalties
+  );
 }
 
 function TeamBadge({ name, color, small = false }) {
@@ -757,6 +792,9 @@ function StandingsTable({ rows, seasonNumber }) {
             React.createElement(TeamBadge, { name: row.name, color: row.color, small: true }),
             React.createElement("div", { style: { minWidth: 0 } },
               React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#fff", letterSpacing: 1 } }, row.name),
+              (row.penaltyPoints > 0 || row.penaltyGd > 0) && React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#ff8aa9", marginTop: 2 } },
+                `${row.penaltyPoints > 0 ? `-${row.penaltyPoints} pts` : ""}${row.penaltyPoints > 0 && row.penaltyGd > 0 ? " · " : ""}${row.penaltyGd > 0 ? `-${row.penaltyGd} gd` : ""}`
+              ),
               React.createElement(LeaguePlacementChip, { index, totalTeams: rows.length, seasonNumber })
             )
           )
@@ -920,9 +958,11 @@ export function ResultsScreen({
   const [savingFixtureId, setSavingFixtureId] = React.useState("");
   const [knockoutScores, setKnockoutScores] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).knockoutScores);
   const [cupFixture, setCupFixture] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).cupFixture);
+  const [penaltyAdjustments, setPenaltyAdjustments] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).penaltyAdjustments);
   const [knockoutPublishing, setKnockoutPublishing] = React.useState(false);
   const [knockoutPublished, setKnockoutPublished] = React.useState(false);
   const [startingCupFixture, setStartingCupFixture] = React.useState(false);
+  const [savingPenalties, setSavingPenalties] = React.useState(false);
   const [loadingLatest, setLoadingLatest] = React.useState(false);
   const [startingTransferWindow, setStartingTransferWindow] = React.useState(false);
   const [deadlineDateDraft, setDeadlineDateDraft] = React.useState("");
@@ -947,6 +987,7 @@ export function ResultsScreen({
     const next = splitFixtureState(fixtures, knockoutFormat);
     setFixturesState(next.groupFixtures);
     setCupFixture(next.cupFixture);
+    setPenaltyAdjustments(next.penaltyAdjustments);
     setKnockoutScores((prev) => Object.keys(prev).length > 0 ? prev : next.knockoutScores);
   }, [fixtures, knockoutFormat]);
 
@@ -1017,8 +1058,8 @@ export function ResultsScreen({
   const totalMatches = allFixtures.length;
   const playedMatches = allFixtures.filter(isPlayedFixture).length;
   const standings = React.useMemo(
-    () => buildLeagueTable(participants.map((participant) => participant.name), allFixtures, participantMeta),
-    [participants, allFixtures, participantMeta]
+    () => buildLeagueTable(participants.map((participant) => participant.name), allFixtures, participantMeta, penaltyAdjustments),
+    [participants, allFixtures, participantMeta, penaltyAdjustments]
   );
   const matchTeamOptions = React.useMemo(
     () => participants.map((participant) => participant.name).filter(Boolean),
@@ -1072,8 +1113,24 @@ export function ResultsScreen({
         }))
         .filter((section) => section.fixtures.length > 0);
 
-    if (!hasFixtureSplit || matchLegFilter === "ALL") return teamFiltered;
-    return teamFiltered.filter((section) => section.leg === matchLegFilter);
+    const legFiltered = (!hasFixtureSplit || matchLegFilter === "ALL")
+      ? teamFiltered
+      : teamFiltered.filter((section) => section.leg === matchLegFilter);
+
+    return legFiltered.map((section) => ({
+      ...section,
+      fixtures: [...section.fixtures].sort((left, right) => {
+        const playedDiff = Number(isPlayedFixture(right)) - Number(isPlayedFixture(left));
+        if (playedDiff !== 0) return playedDiff;
+        if (isPlayedFixture(left) && isPlayedFixture(right)) {
+          const updatedDiff = (Number(right.scoreUpdatedAt) || 0) - (Number(left.scoreUpdatedAt) || 0);
+          if (updatedDiff !== 0) return updatedDiff;
+        }
+        const roundDiff = (Number(left.round) || 0) - (Number(right.round) || 0);
+        if (roundDiff !== 0) return roundDiff;
+        return String(left.id || "").localeCompare(String(right.id || ""));
+      }),
+    }));
   }, [groupSections, hasFixtureSplit, matchLegFilter, matchTeamFilter]);
 
   const firstRoundComplete = React.useMemo(() => {
@@ -1131,6 +1188,7 @@ export function ResultsScreen({
       const next = splitFixtureState(latest, knockoutFormat);
       setFixturesState(next.groupFixtures);
       setCupFixture(next.cupFixture);
+      setPenaltyAdjustments(next.penaltyAdjustments);
       setKnockoutScores(next.knockoutScores);
     } catch (_) {
       // Keep the existing UI state if refresh fails.
@@ -1286,6 +1344,7 @@ export function ResultsScreen({
               await apiSaveFixtures(auctionResultId, {
                 ...next,
                 ...(cupFixture ? { _cup: cupFixture } : {}),
+                ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
                 _knockout: knockoutScores,
               }, user?.token);
             } else {
@@ -1330,6 +1389,7 @@ export function ResultsScreen({
       await apiSaveFixtures(auctionResultId, {
         ...fixturesState,
         _cup: nextCupFixture,
+        ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
         _knockout: {},
       }, user.token);
       setCupFixture(nextCupFixture);
@@ -1340,7 +1400,72 @@ export function ResultsScreen({
     } finally {
       setStartingCupFixture(false);
     }
-  }, [auctionResultId, fixturesState, participants, suggestedCupFixture, user?.token]);
+  }, [auctionResultId, fixturesState, participants, penaltyAdjustments, suggestedCupFixture, user?.token]);
+
+  const handleUndoCupFixture = React.useCallback(async () => {
+    if (!auctionResultId || !user?.token) return;
+    setStartingCupFixture(true);
+    try {
+      await apiSaveFixtures(auctionResultId, {
+        ...fixturesState,
+        ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
+      }, user.token);
+      setCupFixture(null);
+      setKnockoutScores({});
+      setKnockoutPublished(false);
+    } catch (err) {
+      alert(`Failed to undo cup fixture: ${err.message}`);
+    } finally {
+      setStartingCupFixture(false);
+    }
+  }, [auctionResultId, fixturesState, penaltyAdjustments, user?.token]);
+
+  const handlePenaltyChange = React.useCallback((teamName, key, rawValue) => {
+    const nextValue = rawValue === "" ? 0 : Math.max(0, parseInt(rawValue, 10) || 0);
+    setPenaltyAdjustments((prev) => {
+      const current = prev?.[teamName] || { points: 0, gd: 0 };
+      const nextEntry = {
+        ...current,
+        [key]: nextValue,
+      };
+      const next = { ...prev };
+      if ((nextEntry.points || 0) === 0 && (nextEntry.gd || 0) === 0) {
+        delete next[teamName];
+      } else {
+        next[teamName] = nextEntry;
+      }
+      return next;
+    });
+  }, []);
+
+  const handleSavePenalties = React.useCallback(async () => {
+    if (!auctionResultId || !user?.token) return;
+    setSavingPenalties(true);
+    try {
+      await apiSaveFixtures(auctionResultId, {
+        ...fixturesState,
+        ...(cupFixture ? { _cup: cupFixture } : {}),
+        ...(Object.keys(knockoutScores).length > 0 ? { _knockout: knockoutScores } : {}),
+        ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
+      }, user.token);
+    } catch (err) {
+      alert(`Failed to save penalties: ${err.message}`);
+    } finally {
+      setSavingPenalties(false);
+    }
+  }, [auctionResultId, cupFixture, fixturesState, knockoutScores, penaltyAdjustments, user?.token]);
+
+  const penaltyRows = React.useMemo(
+    () => participants.map((participant) => ({
+      name: participant.name,
+      points: penaltyAdjustments?.[participant.name]?.points || 0,
+      gd: penaltyAdjustments?.[participant.name]?.gd || 0,
+      color: participantMeta.get(participant.name)?.color || "#4FC3F7",
+    })),
+    [participantMeta, participants, penaltyAdjustments]
+  );
+
+  const hasPenaltyAdjustments = penaltyRows.some((row) => row.points > 0 || row.gd > 0);
 
   const handleStartTransfer = async () => {
     if (!isHost || !onStartTransferWindow || startingTransferWindow || !firstRoundComplete) return;
@@ -1701,6 +1826,38 @@ export function ResultsScreen({
           }, nextView === "table" ? "TABLE" : nextView === "matches" ? "MATCHES" : nextView === "squads" ? "SQUADS" : nextView === "history" ? "ALL PLAYERS" : "BALLON D'OR")),
         ),
         React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+          groupsEnabled && isHost && suggestedCupFixture && !cupFixture && React.createElement("button", {
+            onClick: handleStartCupFixture,
+            disabled: startingCupFixture,
+            style: {
+              background: "#FFD70018",
+              color: "#FFD700",
+              border: "1px solid #FFD70044",
+              borderRadius: 999,
+              padding: "9px 18px",
+              cursor: startingCupFixture ? "default" : "pointer",
+              fontFamily: "'Bebas Neue'",
+              fontSize: 14,
+              letterSpacing: 1,
+              opacity: startingCupFixture ? 0.6 : 1,
+            }
+          }, startingCupFixture ? "STARTING CUP…" : `START CUP · ${getCupFormatLabel(suggestedCupFixture.format).toUpperCase()}`),
+          groupsEnabled && isHost && cupFixture && React.createElement("button", {
+            onClick: handleUndoCupFixture,
+            disabled: startingCupFixture,
+            style: {
+              background: "#FF3D7118",
+              color: "#ff8aa9",
+              border: "1px solid #FF3D7144",
+              borderRadius: 999,
+              padding: "9px 18px",
+              cursor: startingCupFixture ? "default" : "pointer",
+              fontFamily: "'Bebas Neue'",
+              fontSize: 14,
+              letterSpacing: 1,
+              opacity: startingCupFixture ? 0.6 : 1,
+            }
+          }, startingCupFixture ? "REMOVING CUP…" : "UNDO CUP FIXTURE"),
           groupsEnabled && isHost && onStartTransferWindow && React.createElement("button", {
             onClick: handleStartTransfer,
             disabled: startingTransferWindow || !firstRoundComplete || (listingDeadlineValid && !listingDeadlinePassed),
@@ -1744,8 +1901,96 @@ export function ResultsScreen({
           ),
           React.createElement(StandingsTable, { rows: standings, seasonNumber })
         ),
+        (isHost || hasPenaltyAdjustments) && React.createElement("div", { style: { ...surfaceCard, padding: 20 } },
+          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" } },
+            React.createElement("div", null,
+              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#ff8aa9", letterSpacing: 2 } }, "PENALTY ADJUSTMENTS"),
+              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", marginTop: 4 } }, "Deduct points and goal difference for rule breaches.")
+            ),
+            isHost && React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+              React.createElement("button", {
+                onClick: () => setPenaltyAdjustments({}),
+                style: {
+                  background: "#0d1119",
+                  color: "#a7b1c2",
+                  border: "1px solid #1f2937",
+                  borderRadius: 999,
+                  padding: "8px 14px",
+                  cursor: "pointer",
+                  fontFamily: "'Bebas Neue'",
+                  fontSize: 12,
+                  letterSpacing: 1,
+                }
+              }, "CLEAR"),
+              React.createElement("button", {
+                onClick: handleSavePenalties,
+                disabled: savingPenalties,
+                style: {
+                  background: "#ff8aa914",
+                  color: "#ff8aa9",
+                  border: "1px solid #ff8aa944",
+                  borderRadius: 999,
+                  padding: "8px 14px",
+                  cursor: savingPenalties ? "default" : "pointer",
+                  fontFamily: "'Bebas Neue'",
+                  fontSize: 12,
+                  letterSpacing: 1,
+                  opacity: savingPenalties ? 0.6 : 1,
+                }
+              }, savingPenalties ? "SAVING…" : "SAVE PENALTIES")
+            )
+          ),
+          React.createElement("div", { style: { display: "grid", gap: 10 } },
+            penaltyRows
+              .filter((row) => isHost || row.points > 0 || row.gd > 0)
+              .map((row) => React.createElement("div", {
+                key: row.name,
+                style: {
+                  display: "grid",
+                  gridTemplateColumns: isHost ? "minmax(180px,1fr) 110px 110px" : "minmax(180px,1fr) 1fr",
+                  gap: 10,
+                  alignItems: "center",
+                  background: "#0c121ccc",
+                  border: "1px solid #1e2230",
+                  borderRadius: 14,
+                  padding: "12px 14px",
+                }
+              },
+              React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                React.createElement(TeamBadge, { name: row.name, color: row.color, small: true }),
+                React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#fff", letterSpacing: 1 } }, row.name)
+              ),
+              isHost
+                ? React.createElement(React.Fragment, null,
+                    React.createElement("label", { style: { display: "grid", gap: 4 } },
+                      React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, "PTS DEDUCTION"),
+                      React.createElement("input", {
+                        type: "number",
+                        min: 0,
+                        value: row.points,
+                        onChange: (event) => handlePenaltyChange(row.name, "points", event.target.value),
+                        style: { background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 18, textAlign: "center", padding: "8px 0" },
+                      })
+                    ),
+                    React.createElement("label", { style: { display: "grid", gap: 4 } },
+                      React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, "GD DEDUCTION"),
+                      React.createElement("input", {
+                        type: "number",
+                        min: 0,
+                        value: row.gd,
+                        onChange: (event) => handlePenaltyChange(row.name, "gd", event.target.value),
+                        style: { background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 18, textAlign: "center", padding: "8px 0" },
+                      })
+                    )
+                  )
+                : React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#ff8aa9" } },
+                    `${row.points > 0 ? `-${row.points} pts` : ""}${row.points > 0 && row.gd > 0 ? " · " : ""}${row.gd > 0 ? `-${row.gd} gd` : ""}`
+                  )
+              ))
+          )
+        ),
         groupsEnabled && Object.entries(resolvedGroups).map(([label, teams]) => {
-          const table = computeGroupTable(teams, resolvedFixturesByGroup[label] || []);
+          const table = applyPenaltyAdjustments(computeGroupTable(teams, resolvedFixturesByGroup[label] || []), penaltyAdjustments);
           return React.createElement("div", { key: label, style: { ...surfaceCard, padding: 20 } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" } },
               React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#4FC3F7", letterSpacing: 2 } }, `Group ${label}`),
@@ -1759,7 +2004,12 @@ export function ResultsScreen({
               ),
               React.createElement("tbody", null,
                 table.map((row, index) => React.createElement("tr", { key: row.name, style: { fontFamily: "'Rajdhani'", fontSize: 13, color: "#dbe3ef" } },
-                  React.createElement("td", { style: { padding: "10px 6px", fontWeight: 700 } }, `${index + 1}. ${row.name}`),
+                  React.createElement("td", { style: { padding: "10px 6px", fontWeight: 700 } },
+                    `${index + 1}. ${row.name}`,
+                    (row.penaltyPoints > 0 || row.penaltyGd > 0) && React.createElement("div", { style: { fontSize: 11, color: "#ff8aa9", fontWeight: 500 } },
+                      `${row.penaltyPoints > 0 ? `-${row.penaltyPoints} pts` : ""}${row.penaltyPoints > 0 && row.penaltyGd > 0 ? " · " : ""}${row.penaltyGd > 0 ? `-${row.penaltyGd} gd` : ""}`
+                    )
+                  ),
                   React.createElement("td", { style: { padding: "10px 6px", textAlign: "center" } }, row.played),
                   React.createElement("td", { style: { padding: "10px 6px", textAlign: "center", color: row.gd > 0 ? "#22c55e" : row.gd < 0 ? "#ef4444" : "#cbd5e1" } }, row.gd > 0 ? `+${row.gd}` : row.gd),
                   React.createElement("td", { style: { padding: "10px 6px", textAlign: "center", fontWeight: 700, color: "#FFD700" } }, row.points)
@@ -1768,36 +2018,6 @@ export function ResultsScreen({
             )
           );
         }),
-        groupsEnabled && !cupFixture && React.createElement("div", { style: { ...surfaceCard, padding: 20 } },
-          React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
-            React.createElement("div", null,
-              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#FFD700", letterSpacing: 2 } }, "CUP FIXTURE"),
-              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", marginTop: 4 } },
-                suggestedCupFixture
-                  ? `No cup fixture yet. Starting now will create ${getCupFormatLabel(suggestedCupFixture.format)}.`
-                  : "No cup fixture available for this table setup yet."
-              )
-            ),
-            isHost
-              ? React.createElement("button", {
-                  onClick: handleStartCupFixture,
-                  disabled: startingCupFixture || !suggestedCupFixture,
-                  style: {
-                    background: "linear-gradient(135deg,#FFD700,#FFA500)",
-                    color: "#000",
-                    border: "none",
-                    borderRadius: 999,
-                    padding: "10px 18px",
-                    cursor: startingCupFixture || !suggestedCupFixture ? "default" : "pointer",
-                    fontFamily: "'Bebas Neue'",
-                    fontSize: 14,
-                    letterSpacing: 1,
-                    opacity: startingCupFixture || !suggestedCupFixture ? 0.6 : 1,
-                  }
-                }, startingCupFixture ? "STARTING CUP…" : "START CUP FIXTURE")
-              : React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#718096" } }, "Only the host can start the cup fixture.")
-          )
-        ),
         cupFixture && Object.keys(groups).length >= 1 && React.createElement(KnockoutBracket, {
           groups,
           fixturesState,
@@ -1822,6 +2042,7 @@ export function ResultsScreen({
               await apiSaveFixtures(auctionResultId, {
                 ...fixturesState,
                 ...(cupFixture ? { _cup: cupFixture } : {}),
+                ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
                 _knockout: knockoutScores,
               }, user.token);
               setKnockoutPublished(true);
@@ -1941,55 +2162,76 @@ export function ResultsScreen({
                   const awayColor = participantMeta.get(fixture.away)?.color || "#FF6B35";
                   const played = isPlayedFixture(fixture);
                   const canEditFixture = isHost || selectedName === fixture.home || selectedName === fixture.away;
-                  const teamRows = [
-                    { teamName: fixture.home, color: homeColor, scoreKey: "homeGoals", side: "home" },
-                    { teamName: fixture.away, color: awayColor, scoreKey: "awayGoals", side: "away" },
-                  ];
+                  const winnerLabel = played
+                    ? Number(fixture.homeGoals) > Number(fixture.awayGoals)
+                      ? `${fixture.home} won`
+                      : Number(fixture.homeGoals) < Number(fixture.awayGoals)
+                        ? `${fixture.away} won`
+                        : "Draw"
+                    : "Enter score to record result";
 
                   return React.createElement(
                     "div",
-                    { key: fixture.id, style: { background: "#0c121ccc", border: "1px solid #1e2230", borderRadius: 18, padding: "14px 16px", display: "grid", gridTemplateColumns: "92px 1fr auto", gap: 14, alignItems: "center" } },
-                    React.createElement("div", { style: { textAlign: "center" } },
-                      React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 12, color: played ? "#22c55e" : "#94a3b8", letterSpacing: 2 } }, played ? "FT" : `R${fixture.round || 1}`),
-                      React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#667189", marginTop: 8 } }, played ? formatRelativeTime(fixture.scoreUpdatedAt) : "Awaiting result")
+                    { key: fixture.id, style: { background: "#0c121ccc", border: "1px solid #1e2230", borderRadius: 18, padding: "16px 18px", display: "grid", gap: 12 } },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
+                      React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" } },
+                        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 12, color: played ? "#22c55e" : "#94a3b8", letterSpacing: 2 } }, played ? "FT" : `R${fixture.round || 1}`),
+                        React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#667189" } }, played ? formatRelativeTime(fixture.scoreUpdatedAt) : "Awaiting result")
+                      ),
+                      React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, savingFixtureId === fixture.id ? "Syncing…" : "Synced")
                     ),
-                    React.createElement(
-                      "div",
-                      { style: { display: "flex", flexDirection: "column", gap: 10 } },
-                      teamRows.map(({ teamName, color, scoreKey, side }) => React.createElement(
-                        "div",
-                        { key: `${fixture.id}-${scoreKey}`, style: { display: "grid", gridTemplateColumns: "34px auto", gap: 10, alignItems: "center" } },
-                        React.createElement(TeamBadge, { name: teamName, color, small: false }),
-                        canEditFixture
-                          ? React.createElement("input", {
-                              type: "number",
-                              min: 0,
-                              value: fixture[scoreKey] ?? "",
-                              onChange: (e) => handleFixtureGoalChange(section.groupLabel, fixture.id, side, e.target.value),
-                              style: { width: 52, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 20, textAlign: "center", padding: "6px 0", justifySelf: "end" },
-                            })
-                          : React.createElement("div", { style: { width: 52, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 20, textAlign: "center", padding: "6px 0", justifySelf: "end" } }, fixture[scoreKey] ?? "–")
-                      ))
+                    React.createElement("div", {
+                      style: {
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0,1fr) 64px 18px 64px minmax(0,1fr)",
+                        gap: 10,
+                        alignItems: "center",
+                      }
+                    },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, minWidth: 0 } },
+                      React.createElement("div", { style: { minWidth: 0, textAlign: "right", fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, fixture.home),
+                      React.createElement(TeamBadge, { name: fixture.home, color: homeColor, small: true })
                     ),
-                    React.createElement("div", { style: { textAlign: "right" } },
-                      React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, savingFixtureId === fixture.id ? "Syncing…" : "Synced"),
-                      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end", marginTop: 10 } },
-                        played && React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#FFD700", letterSpacing: 2 } }, Number(fixture.homeGoals) > Number(fixture.awayGoals) ? `${fixture.home} (WIN)` : Number(fixture.homeGoals) < Number(fixture.awayGoals) ? `${fixture.away} (WIN)` : "DRAW"),
-                        canEditFixture && React.createElement("button", {
-                          onClick: () => setSelectedUploadFixture({ ...fixture, groupLabel: section.groupLabel }),
-                          style: {
-                            background: "#132337",
-                            color: "#8fe7c0",
-                            border: "1px solid rgba(143,231,192,.28)",
-                            borderRadius: 999,
-                            padding: "8px 14px",
-                            cursor: "pointer",
-                            fontFamily: "'Bebas Neue'",
-                            fontSize: 12,
-                            letterSpacing: 1,
-                          }
-                        }, "UPLOAD STATS")
-                      )
+                    canEditFixture
+                      ? React.createElement("input", {
+                          type: "number",
+                          min: 0,
+                          value: fixture.homeGoals ?? "",
+                          onChange: (e) => handleFixtureGoalChange(section.groupLabel, fixture.id, "home", e.target.value),
+                          style: { width: 64, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 24, textAlign: "center", padding: "8px 0" },
+                        })
+                      : React.createElement("div", { style: { width: 64, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 24, textAlign: "center", padding: "8px 0" } }, fixture.homeGoals ?? "–"),
+                    React.createElement("div", { style: { textAlign: "center", fontFamily: "'Bebas Neue'", fontSize: 18, color: "#7f8ea6" } }, "-"),
+                    canEditFixture
+                      ? React.createElement("input", {
+                          type: "number",
+                          min: 0,
+                          value: fixture.awayGoals ?? "",
+                          onChange: (e) => handleFixtureGoalChange(section.groupLabel, fixture.id, "away", e.target.value),
+                          style: { width: 64, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 24, textAlign: "center", padding: "8px 0" },
+                        })
+                      : React.createElement("div", { style: { width: 64, background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 24, textAlign: "center", padding: "8px 0" } }, fixture.awayGoals ?? "–"),
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 } },
+                      React.createElement(TeamBadge, { name: fixture.away, color: awayColor, small: true }),
+                      React.createElement("div", { style: { minWidth: 0, fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, fixture.away)
+                    )
+                    ),
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
+                      React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: played ? "#FFD700" : "#7f8ea6", letterSpacing: 1 } }, winnerLabel),
+                      canEditFixture && React.createElement("button", {
+                        onClick: () => setSelectedUploadFixture({ ...fixture, groupLabel: section.groupLabel }),
+                        style: {
+                          background: "#132337",
+                          color: "#8fe7c0",
+                          border: "1px solid rgba(143,231,192,.28)",
+                          borderRadius: 999,
+                          padding: "8px 14px",
+                          cursor: "pointer",
+                          fontFamily: "'Bebas Neue'",
+                          fontSize: 12,
+                          letterSpacing: 1,
+                        }
+                      }, "UPLOAD STATS")
                     )
                   );
                 })
