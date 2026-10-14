@@ -217,6 +217,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     && Array.isArray(transferWindow?.completedBy)
     && participants.length > 0
     && transferWindow.completedBy.length >= participants.length;
+  const canOpenTransferMarketNow = everyoneCompletedTransferSales && (transferDeadlinePassed || !transferDeadlineValid || everyoneCompletedTransferSales);
   const myMysteryUsed = Boolean(mysteryUsed?.[user.username]);
   const myMysteryCandidateId = mysteryCurrent?.[user.username];
   const myMysteryCandidate = myMysteryCandidateId != null
@@ -787,7 +788,11 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleOpenTransferMarket = async () => {
     if (!isHost || !initSession?.id || openingTransferMarket) return;
-    if (!transferDeadlinePassed) {
+    if (!everyoneCompletedTransferSales) {
+      showToast(`Wait until every participant submits ${transferSaleMin}-${transferSaleMax} listings`, "#FFB84D");
+      return;
+    }
+    if (!transferDeadlinePassed && transferDeadlineValid && !everyoneCompletedTransferSales) {
       showToast("Wait until the listing deadline ends before opening the market", "#FFB84D");
       return;
     }
@@ -1130,13 +1135,13 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
               transferDeadlinePassed
                 ? `The listing deadline has ended. The host can now open the market when ready.`
                 : everyoneCompletedTransferSales
-                ? `Everyone has submitted the required listings. Opening the market will randomize ${unsoldCarryCount} unsold carry-over players plus the listed players into new lots and refresh Mystery Card candidates.`
+                ? `Everyone has submitted the required listings. You can open the market now without waiting for the deadline. Opening the market will randomize ${unsoldCarryCount} unsold carry-over players plus the listed players into new lots and refresh Mystery Card candidates.`
                 : `Wait until every participant submits ${transferSaleMin}-${transferSaleMax} listings before opening the transfer market.`),
               React.createElement("button", {
               onClick: handleOpenTransferMarket,
-              disabled: !everyoneCompletedTransferSales || openingTransferMarket || !transferDeadlinePassed,
-              style: { ...BTN.gold, width: "100%", opacity: !everyoneCompletedTransferSales || openingTransferMarket || !transferDeadlinePassed ? 0.6 : 1 }
-              }, openingTransferMarket ? "OPENING MARKET…" : !transferDeadlinePassed ? "WAIT FOR DEADLINE" : "OPEN TRANSFER MARKET")
+              disabled: !everyoneCompletedTransferSales || openingTransferMarket || !canOpenTransferMarketNow,
+              style: { ...BTN.gold, width: "100%", opacity: !everyoneCompletedTransferSales || openingTransferMarket || !canOpenTransferMarketNow ? 0.6 : 1 }
+              }, openingTransferMarket ? "OPENING MARKET…" : !everyoneCompletedTransferSales ? "WAIT FOR LISTINGS" : "OPEN TRANSFER MARKET")
             )
           )
         )
