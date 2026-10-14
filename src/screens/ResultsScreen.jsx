@@ -506,6 +506,15 @@ function splitFixtureState(fixtures, fallbackFormat = "semiFinal") {
   };
 }
 
+function buildFixturePayload({ groupFixtures = {}, cupFixture = null, penaltyAdjustments = {}, knockoutScores = {} } = {}) {
+  return {
+    ...groupFixtures,
+    _cup: cupFixture ?? null,
+    _penalties: Object.keys(penaltyAdjustments || {}).length > 0 ? penaltyAdjustments : null,
+    _knockout: Object.keys(knockoutScores || {}).length > 0 ? knockoutScores : null,
+  };
+}
+
 function inferCupFixtureConfig(groups, participants = []) {
   const participantCount = Array.isArray(participants) && participants.length > 0
     ? participants.length
@@ -1342,12 +1351,12 @@ export function ResultsScreen({
             const currentFixture = (next[groupLabel] || []).find((fixture) => fixture.id === fixtureId);
             if (!currentFixture) return;
             if (isHost) {
-              await apiSaveFixtures(auctionResultId, {
-                ...next,
-                ...(cupFixture ? { _cup: cupFixture } : {}),
-                ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
-                _knockout: knockoutScores,
-              }, user?.token);
+              await apiSaveFixtures(auctionResultId, buildFixturePayload({
+                groupFixtures: next,
+                cupFixture,
+                penaltyAdjustments,
+                knockoutScores,
+              }), user?.token);
             } else {
               await apiSaveFixtureScore(
                 auctionResultId,
@@ -1387,12 +1396,12 @@ export function ResultsScreen({
         ...randomBracket,
         singleLeg: true,
       };
-      await apiSaveFixtures(auctionResultId, {
-        ...fixturesState,
-        _cup: nextCupFixture,
-        ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
-        _knockout: {},
-      }, user.token);
+      await apiSaveFixtures(auctionResultId, buildFixturePayload({
+        groupFixtures: fixturesState,
+        cupFixture: nextCupFixture,
+        penaltyAdjustments,
+        knockoutScores: {},
+      }), user.token);
       setCupFixture(nextCupFixture);
       setKnockoutScores({});
       setKnockoutPublished(false);
@@ -1407,10 +1416,12 @@ export function ResultsScreen({
     if (!auctionResultId || !user?.token) return;
     setStartingCupFixture(true);
     try {
-      await apiSaveFixtures(auctionResultId, {
-        ...fixturesState,
-        ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
-      }, user.token);
+      await apiSaveFixtures(auctionResultId, buildFixturePayload({
+        groupFixtures: fixturesState,
+        cupFixture: null,
+        penaltyAdjustments,
+        knockoutScores: {},
+      }), user.token);
       setCupFixture(null);
       setKnockoutScores({});
       setKnockoutPublished(false);
@@ -1439,16 +1450,18 @@ export function ResultsScreen({
     });
   }, []);
 
-  const handleSavePenalties = React.useCallback(async () => {
+  const handleSavePenalties = React.useCallback(async (nextPenaltyAdjustments = null) => {
     if (!auctionResultId || !user?.token) return;
+    const payloadPenaltyAdjustments = nextPenaltyAdjustments === null ? penaltyAdjustments : nextPenaltyAdjustments;
     setSavingPenalties(true);
     try {
-      await apiSaveFixtures(auctionResultId, {
-        ...fixturesState,
-        ...(cupFixture ? { _cup: cupFixture } : {}),
-        ...(Object.keys(knockoutScores).length > 0 ? { _knockout: knockoutScores } : {}),
-        ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
-      }, user.token);
+      await apiSaveFixtures(auctionResultId, buildFixturePayload({
+        groupFixtures: fixturesState,
+        cupFixture,
+        penaltyAdjustments: payloadPenaltyAdjustments,
+        knockoutScores,
+      }), user.token);
+      setPenaltyAdjustments(payloadPenaltyAdjustments);
     } catch (err) {
       alert(`Failed to save penalties: ${err.message}`);
     } finally {
@@ -1910,7 +1923,11 @@ export function ResultsScreen({
             ),
             isHost && React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
               React.createElement("button", {
-                onClick: () => setPenaltyAdjustments({}),
+                onClick: async () => {
+                  const nextPenalties = {};
+                  setPenaltyAdjustments(nextPenalties);
+                  await handleSavePenalties(nextPenalties);
+                },
                 style: {
                   background: "#0d1119",
                   color: "#a7b1c2",
@@ -2022,12 +2039,12 @@ export function ResultsScreen({
             if (!auctionResultId || !user?.token) return;
             setKnockoutPublishing(true);
             try {
-              await apiSaveFixtures(auctionResultId, {
-                ...fixturesState,
-                ...(cupFixture ? { _cup: cupFixture } : {}),
-                ...(Object.keys(penaltyAdjustments).length > 0 ? { _penalties: penaltyAdjustments } : {}),
-                _knockout: knockoutScores,
-              }, user.token);
+              await apiSaveFixtures(auctionResultId, buildFixturePayload({
+                groupFixtures: fixturesState,
+                cupFixture,
+                penaltyAdjustments,
+                knockoutScores,
+              }), user.token);
               setKnockoutPublished(true);
             } catch (_) {
               // Surface stays local until the next publish attempt.
