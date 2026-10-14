@@ -1947,39 +1947,50 @@ export function ResultsScreen({
                 key: row.name,
                 style: {
                   display: "grid",
-                  gridTemplateColumns: isHost ? "minmax(180px,1fr) 110px 110px" : "minmax(180px,1fr) 1fr",
-                  gap: 10,
-                  alignItems: "center",
+                  gridTemplateColumns: isHost ? "minmax(220px,1fr) repeat(2, minmax(120px, 140px))" : "minmax(180px,1fr) 1fr",
+                  gap: 12,
+                  alignItems: "end",
                   background: "#0c121ccc",
                   border: "1px solid #1e2230",
                   borderRadius: 14,
                   padding: "12px 14px",
                 }
               },
-              React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+              React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 } },
                 React.createElement(TeamBadge, { name: row.name, color: row.color, small: true }),
-                React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#fff", letterSpacing: 1 } }, row.name)
+                React.createElement("div", {
+                  style: {
+                    fontFamily: "'Bebas Neue'",
+                    fontSize: 18,
+                    color: "#fff",
+                    letterSpacing: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }
+                }, row.name)
               ),
               isHost
                 ? React.createElement(React.Fragment, null,
-                    React.createElement("label", { style: { display: "grid", gap: 4 } },
+                    React.createElement("label", { style: { display: "grid", gap: 4, minWidth: 0 } },
                       React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, "PTS DEDUCTION"),
                       React.createElement("input", {
                         type: "number",
                         min: 0,
                         value: row.points,
                         onChange: (event) => handlePenaltyChange(row.name, "points", event.target.value),
-                        style: { background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 18, textAlign: "center", padding: "8px 0" },
+                        style: { width: "100%", minWidth: 0, boxSizing: "border-box", background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 18, textAlign: "center", padding: "8px 0" },
                       })
                     ),
-                    React.createElement("label", { style: { display: "grid", gap: 4 } },
+                    React.createElement("label", { style: { display: "grid", gap: 4, minWidth: 0 } },
                       React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6" } }, "GD DEDUCTION"),
                       React.createElement("input", {
                         type: "number",
                         min: 0,
                         value: row.gd,
                         onChange: (event) => handlePenaltyChange(row.name, "gd", event.target.value),
-                        style: { background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 18, textAlign: "center", padding: "8px 0" },
+                        style: { width: "100%", minWidth: 0, boxSizing: "border-box", background: "#05070d", border: "1px solid #273246", borderRadius: 10, color: "#FFD700", fontFamily: "'Bebas Neue'", fontSize: 18, textAlign: "center", padding: "8px 0" },
                       })
                     )
                   )
@@ -2217,7 +2228,14 @@ export function ResultsScreen({
                     )
                     ),
                     React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
-                      React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: played ? "#FFD700" : "#7f8ea6", letterSpacing: 1 } }, winnerLabel),
+                      React.createElement("div", {
+                        style: {
+                          fontFamily: "'Rajdhani'",
+                          fontSize: 12,
+                          color: "#7f8ea6",
+                          letterSpacing: 0.4,
+                        }
+                      }, winnerLabel),
                       canEditFixture && React.createElement("button", {
                         onClick: () => setSelectedUploadFixture({ ...fixture, groupLabel: section.groupLabel }),
                         style: {
