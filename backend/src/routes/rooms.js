@@ -212,6 +212,33 @@ async function buildTransferAuctionPool(sourceResult, transferSession) {
   return Array.from(byId.values());
 }
 
+async function clearStaleTransferWindowState(db, session) {
+  const sourceResultId = String(
+    session?.transferWindow?.sourceResultId
+    || session?.transferWindow?.sourceSessionId
+    || ""
+  ).trim();
+  if (!sourceResultId) return;
+
+  const resultRef = db.collection("auctionResults").doc(sourceResultId);
+  const resultSnap = await resultRef.get();
+  if (!resultSnap.exists) return;
+
+  const result = normalizeAuctionResultDocument(resultSnap.data());
+  const activeSessionId = String(result.transferWindow?.activeSessionId || "");
+  if (!activeSessionId || activeSessionId !== String(session.id)) return;
+
+  await resultRef.set({
+    transferWindow: {
+      ...(result.transferWindow || {}),
+      activeSessionId: "",
+      phase: "locked",
+      closedAt: Date.now(),
+    },
+    updatedAt: Date.now(),
+  }, { merge: true });
+}
+
 async function cleanupLiveSession(db, session) {
   if (!session?.id) return;
   const batch = db.batch();
@@ -222,6 +249,7 @@ async function cleanupLiveSession(db, session) {
     batch.delete(roomRef);
   }
   await batch.commit();
+  await clearStaleTransferWindowState(db, session);
 }
 
 router.post("/rooms", requireUserAuth, async (req, res) => {

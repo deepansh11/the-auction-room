@@ -32,6 +32,45 @@ export function isAuthExpiredError(error) {
   return Number(error?.status) === 401 || error?.code === "AUTH_EXPIRED";
 }
 
+function sanitizeJsonValue(value, seen = new WeakSet()) {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") {
+    return undefined;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) return undefined;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      return value.map((item) => sanitizeJsonValue(item, seen));
+    }
+    const next = {};
+    Object.entries(value).forEach(([key, entry]) => {
+      const sanitized = sanitizeJsonValue(entry, seen);
+      if (typeof sanitized !== "undefined") {
+        next[key] = sanitized;
+      }
+    });
+    return next;
+  }
+  return undefined;
+}
+
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value);
+  } catch (_err) {
+    return JSON.stringify(sanitizeJsonValue(value));
+  }
+}
+
 async function request(path, { method = "GET", body, token } = {}) {
   requireBaseUrl();
   const headers = { "Content-Type": "application/json" };
@@ -44,7 +83,7 @@ async function request(path, { method = "GET", body, token } = {}) {
     res = await fetch(`${API_BASE_URL}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: body ? safeStringify(body) : undefined,
       cache: "no-store",
       signal: controller.signal,
     });

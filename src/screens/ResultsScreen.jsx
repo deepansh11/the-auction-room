@@ -1154,8 +1154,8 @@ export function ResultsScreen({
   }, [groupsEnabled, resolvedGroups, resolvedFixturesByGroup]);
 
   const effectiveTransferWindow = transferSessionState?.transferWindow || resultTransferState.transferWindow || transferWindow || {};
-  const transferWindowAlreadyOpened = Boolean(transferWindow?.activeSessionId || transferWindow?.openedAt);
-  const transferSessionId = String(transferWindow?.activeSessionId || "");
+  const transferSessionId = String(effectiveTransferWindow?.activeSessionId || transferWindow?.activeSessionId || "");
+  const transferWindowAlreadyOpened = Boolean(transferSessionId || effectiveTransferWindow?.openedAt || transferWindow?.openedAt);
   const listingDeadlineAt = Number(effectiveTransferWindow?.listingDeadlineAt || 0);
   const listingDeadlineValid = Number.isFinite(listingDeadlineAt) && listingDeadlineAt > 0;
   const listingDeadlineRemaining = listingDeadlineValid ? listingDeadlineAt - clockNow : null;
