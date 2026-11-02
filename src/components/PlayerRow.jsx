@@ -2,6 +2,8 @@ import React from "react";
 import { sfx } from "../utils/sfx.js";
 import { getTierData, getTierKey, TIERS, POS_GROUPS, getPosGroup } from "../game/constants.js";
 import { StatusPill } from "../theme/footballTheme.js";
+import { PlayerAttributes } from "./PlayerAttributes.jsx";
+import { getPlayerAttributes } from "../lib/playerAttributes.js";
 
 function numOrDash(value) {
   return Number.isFinite(value) ? value : "--";
@@ -23,54 +25,7 @@ function displayName(player) {
 }
 
 function getStatPairs(player) {
-  const pos = String(player?.pos || "").toUpperCase();
-  if (pos === "GK") {
-    return [
-      ["DIV", numOrDash(player?.gkDiving)],
-      ["HAN", numOrDash(player?.gkHandling)],
-      ["KIC", numOrDash(player?.gkKicking)],
-      ["REF", numOrDash(player?.gkReflexes)],
-      ["SPD", numOrDash(player?.gkSpeed)],
-      ["POS", numOrDash(player?.gkPositioning)],
-    ];
-  }
-  const defenders = ["CB","LB","RB","LWB","RWB"];
-  const defMids   = ["CDM","CM"];
-  const attMids   = ["CAM","LM","RM","LW","RW"];
-  const attackers = ["ST","CF","SS"];
-  if (defenders.includes(pos)) {
-    return [
-      ["DEF", numOrDash(player?.defending)], ["PHY", numOrDash(player?.physic)],
-      ["PAC", numOrDash(player?.pace)],       ["PAS", numOrDash(player?.passing)],
-      ["DRI", numOrDash(player?.dribbling)],  ["SHO", numOrDash(player?.shooting)],
-    ];
-  }
-  if (defMids.includes(pos)) {
-    return [
-      ["PAS", numOrDash(player?.passing)],    ["DEF", numOrDash(player?.defending)],
-      ["PHY", numOrDash(player?.physic)],      ["PAC", numOrDash(player?.pace)],
-      ["DRI", numOrDash(player?.dribbling)],  ["SHO", numOrDash(player?.shooting)],
-    ];
-  }
-  if (attMids.includes(pos)) {
-    return [
-      ["PAS", numOrDash(player?.passing)],    ["DRI", numOrDash(player?.dribbling)],
-      ["PAC", numOrDash(player?.pace)],        ["SHO", numOrDash(player?.shooting)],
-      ["DEF", numOrDash(player?.defending)],  ["PHY", numOrDash(player?.physic)],
-    ];
-  }
-  if (attackers.includes(pos)) {
-    return [
-      ["PAC", numOrDash(player?.pace)],        ["SHO", numOrDash(player?.shooting)],
-      ["DRI", numOrDash(player?.dribbling)],  ["PAS", numOrDash(player?.passing)],
-      ["PHY", numOrDash(player?.physic)],      ["DEF", numOrDash(player?.defending)],
-    ];
-  }
-  return [
-    ["PAC", numOrDash(player?.pace)],        ["SHO", numOrDash(player?.shooting)],
-    ["PAS", numOrDash(player?.passing)],     ["DRI", numOrDash(player?.dribbling)],
-    ["DEF", numOrDash(player?.defending)],   ["PHY", numOrDash(player?.physic)],
-  ];
+  return getPlayerAttributes(player).map(stat => [stat.short, stat.value ?? "--"]);
 }
 
 export function PlayerRow({
@@ -89,13 +44,16 @@ export function PlayerRow({
   wishlists=[],
   participants=[],
   currentUserName="",
+  compact = false,
 }) {
   const [faceFailed, setFaceFailed] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
+  const detailsId = React.useId();
   const td = getTierData(player.rating, tiers);
   const tk = getTierKey(player.rating, tiers);
   const pg = POS_GROUPS[getPosGroup(player.pos)];
   const positionsText = player.positionsText || player.positions?.join(", ") || player.pos;
-  const statPairs = getStatPairs(player);
+  const statPairs = !compact ? getStatPairs(player) : [];
 
   // Check if this player is in my squad
   const inMySquad = participants?.find(p => p.name === currentUserName)?.squad?.some(s => s.id === player.id) ?? false;
@@ -104,9 +62,10 @@ export function PlayerRow({
   const unavailableText = sold ? (unavailableLabel || "SOLD") : `✓ ${ownerName}`;
 
   return React.createElement("div", {
+    className: compact ? "auction-player-row" : undefined,
     style: {
       display: "grid",
-      gridTemplateColumns: "58px 1fr auto",
+      gridTemplateColumns: compact ? "48px minmax(0, 1fr) auto" : "58px 1fr auto",
       alignItems: "center",
       gap: 10,
       padding: "8px 10px",
@@ -114,19 +73,23 @@ export function PlayerRow({
       marginBottom: 4,
       background: unavailable ? "#08090d" : "#0d0f16",
       border: `1px solid ${unavailable ? "#111318" : cantAfford ? "#111" : td.border}`,
-      opacity: unavailable ? 0.45 : cantAfford ? 0.5 : 1,
-      animation: `rowIn .22s ease ${animDelay}s both`,
+      opacity: unavailable ? 0.65 : cantAfford ? 0.75 : 1,
+      animation: compact ? "none" : `rowIn .22s ease ${animDelay}s both`,
     }
   },
     player.playerFaceUrl && !faceFailed
       ? React.createElement("img", {
           src: player.playerFaceUrl,
           alt: player.name,
+          loading: "lazy",
+          decoding: "async",
+          width: compact ? 44 : 56,
+          height: compact ? 44 : 56,
           referrerPolicy: "no-referrer",
           onError: () => setFaceFailed(true),
           style: {
-            width: 56,
-            height: 56,
+            width: compact ? 44 : 56,
+            height: compact ? 44 : 56,
             objectFit: "cover",
             borderRadius: 8,
             border: `1px solid ${td.border}`,
@@ -135,8 +98,8 @@ export function PlayerRow({
         })
       : React.createElement("div", {
           style: {
-            width: 56,
-            height: 56,
+            width: compact ? 44 : 56,
+            height: compact ? 44 : 56,
             borderRadius: 8,
             border: `1px solid ${td.border}`,
             background: "linear-gradient(145deg,#101725,#1d2333)",
@@ -164,7 +127,7 @@ export function PlayerRow({
           letterSpacing: 1,
           flexShrink: 0,
         } }, player.pos),
-        React.createElement("span", { style: {
+        !compact && React.createElement("span", { style: {
           fontFamily: "'Rajdhani'",
           fontSize: 10,
           color: td.color,
@@ -174,7 +137,7 @@ export function PlayerRow({
           padding: "2px 5px",
           flexShrink: 0,
         } }, tk),
-        React.createElement("span", { style: {
+        (!compact || !onPick) && React.createElement("span", { style: {
           fontFamily: "'Rajdhani'",
           fontSize: 11,
           fontWeight: 700,
@@ -187,13 +150,13 @@ export function PlayerRow({
         fontFamily: "'Exo 2'",
         fontSize: 13,
         fontWeight: 600,
-        color: unavailable ? "#535b69" : "#dde3ee",
+        color: unavailable ? "#9baac0" : "#dde3ee",
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
         marginTop: 1,
       } }, displayName(player)),
-      React.createElement("div", { style: {
+      !compact && React.createElement("div", { style: {
         fontFamily: "'Rajdhani'",
         fontSize: 10,
         color: "#7c879b",
@@ -201,28 +164,38 @@ export function PlayerRow({
         overflow: "hidden",
         textOverflow: "ellipsis",
       } }, `${positionsText} | ${player.club}`),
-      React.createElement("div", { style: {
+      !compact && React.createElement("div", { style: {
         fontFamily: "'Rajdhani'",
-        fontSize: 10,
-        color: "#667189",
+        fontSize: compact ? 12 : 10,
+        color: compact ? "#a5b3c8" : "#667189",
         display: "flex",
         gap: 8,
         flexWrap: "wrap",
         marginTop: 2,
       } },
         React.createElement("span", null, `Foot: ${player.preferredFoot || "N/A"}`),
+        compact && React.createElement("span", null, `Nation: ${player.nation || "N/A"}`),
+        compact && React.createElement("span", null, `Tier: ${tk}`),
         React.createElement("span", null, `WF: ${numOrDash(player.weakFoot)}`),
         player.pos !== "GK" && React.createElement("span", null, `SM: ${numOrDash(player.skillMoves)}`),
         ...statPairs.map(([label, value]) =>
           React.createElement("span", { key: label }, `${label} ${value}`)
         )
-      )
+      ),
+      compact && React.createElement("button", {
+        type: "button", "aria-expanded": expanded, "aria-controls": detailsId,
+        "aria-label": `${expanded ? "Hide" : "Show"} details for ${displayName(player)}`,
+        onClick: () => setExpanded(value => !value),
+        style: { background: "none", border: 0, color: "#9baec5", cursor: "pointer", padding: "6px 0", fontSize: 12, textAlign: "left" },
+      }, expanded ? "Less detail ▴" : "Details ▾")
     ),
 
     React.createElement("div", { style: { textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 } },
       React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
-      inMySquad && React.createElement(StatusPill, { tone: "green" }, "IN MY SQUAD"),
+       !compact && inMySquad && React.createElement(StatusPill, { tone: "green" }, "IN MY SQUAD"),
         React.createElement("button", {
+          type: "button", "aria-pressed": Boolean(isWishlist),
+          "aria-label": `${isWishlist ? "Remove" : "Add"} ${displayName(player)} ${isWishlist ? "from" : "to"} wishlist`,
           onClick: () => { sfx("wishlist"); onWishlist(player.id); },
           style: {
             background: "none",
@@ -230,7 +203,7 @@ export function PlayerRow({
             cursor: "pointer",
             fontSize: 15,
             color: isWishlist ? "#FF3D71" : "#333",
-            padding: 0,
+            padding: compact ? 8 : 0,
             lineHeight: 1,
           }
         }, isWishlist ? "❤️" : "🤍")
@@ -238,23 +211,25 @@ export function PlayerRow({
       unavailable
         ? React.createElement(StatusPill, { tone: sold ? "orange" : "cyan" }, unavailableText)
         : cantAfford
-          ? React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 10, color: "#666" } }, "can't afford")
+           ? React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#a0a9ba" } }, "Over budget")
           : onPick
             ? React.createElement("button", {
                 onClick: () => onPick(player),
+                type: "button", "aria-label": `Pick ${displayName(player)} for ${td.price}M`,
                 style: {
                   background: `linear-gradient(135deg,${td.color},${td.color}aa)`,
                   color: "#000",
                   border: "none",
                   borderRadius: 6,
-                  padding: "4px 10px",
+                  padding: compact ? "11px 12px" : "4px 10px",
                   fontSize: 11,
                   cursor: "pointer",
                   fontFamily: "'Bebas Neue'",
                   letterSpacing: 1,
                 }
-              }, "PICK")
+              }, compact ? `PICK · ${td.price}M` : "PICK")
             : React.createElement("span", { style: { color: "#444", fontSize: 12 } }, "—")
-    )
+    ),
+    compact && expanded && React.createElement(PlayerAttributes, { id: detailsId, player, tier: tk })
   );
 }

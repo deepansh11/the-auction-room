@@ -1,0 +1,69 @@
+.results-page { min-height: 100vh; background: #070b12; color: #e5ecf6; }
+.results-shell { max-width: 1100px; margin: auto; padding: 20px 20px 48px; }
+.results-header, .results-actions, .results-view-heading, .results-nav { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.results-header { justify-content: space-between; margin-bottom: 20px; }
+.results-header h1 { margin: 0; font: 32px 'Bebas Neue', sans-serif; letter-spacing: 1px; }
+.results-muted { color: #9aaac0; font: 14px 'Rajdhani', sans-serif; }
+.results-page button, .results-page input, .results-page select, .results-page summary { font-size: 14px; }
+.results-actions button, .results-nav button, .results-page .results-button { padding: 10px 14px; color: #dce6f4; background: #101925; border: 1px solid #2d3b50; border-radius: 8px; cursor: pointer; }
+.results-actions button.results-primary, .results-page .results-primary { background: #8fe7c0; color: #09140e; border-color: #8fe7c0; }
+.results-page button:disabled { opacity: .5; cursor: not-allowed; }
+.results-page :is(button,input,select,summary):focus-visible { outline: 2px solid #8fe7c0; outline-offset: 3px; }
+.results-nav { gap: 4px; padding-bottom: 12px; margin-bottom: 18px; border-bottom: 1px solid #243046; }
+.results-nav button { border-color: transparent; background: none; }
+.results-nav button[aria-pressed=true] { color: #8fe7c0; background: #8fe7c012; border-color: #8fe7c044; }
+.results-view-heading { justify-content: space-between; margin: 0 0 16px; }
+.results-view-heading h2 { margin: 0; font: 24px 'Bebas Neue', sans-serif; letter-spacing: 1px; }
+.results-disclosure { border: 1px solid #243046; border-radius: 10px; padding: 12px 16px; margin: 12px 0; background: #0b111c; }
+.results-disclosure > summary { cursor: pointer; color: #b6c8df; font: 600 14px 'Rajdhani', sans-serif; }
+.results-disclosure > summary + * { margin-top: 16px; }
+.results-filters { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.results-filters label { display: grid; gap: 5px; font: 13px 'Rajdhani', sans-serif; color: #a7b5ca; flex: 1 1 140px; min-width: 0; }
+.results-filters > :is(input,select) { flex: 1 1 160px; min-width: 0; max-width: 100%; }
+.results-extra-filters { flex: 1 1 100%; color: #a7b5ca; font: 14px 'Rajdhani', sans-serif; }
+.results-extra-filters summary { cursor: pointer; padding: 8px 0; }
+.results-filters input, .results-filters select { box-sizing: border-box; padding: 10px; border: 1px solid #2b3c53; border-radius: 8px; color: #fff; background: #0b1421; width: 100%; min-width: 0; }
+.result-match { border: 1px solid #243046; border-radius: 10px; background: #0b111c; overflow: hidden; }
+.results-page .result-match-summary { display: grid; grid-template-columns: minmax(0,1fr) 72px minmax(0,1fr) auto auto; width: 100%; gap: 12px; align-items: center; border: 0; background: none; color: #e5ecf6; padding: 16px; cursor: pointer; text-align: left; }
+.result-match-team { overflow-wrap: anywhere; font: 600 15px 'Rajdhani', sans-serif; }
+.result-match-owner { display: block; color: #9aaac0; font-size: 12px; font-weight: 400; }
+.results-club-choice { display: grid; gap: 7px; margin: 0; min-width: 0; flex: 0 1 350px; font: 14px 'Rajdhani', sans-serif; }
+.results-club-choice select { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid #354960; border-radius: 7px; background: #080e18; color: #eef4fc; font-size: 16px; }
+.result-match-score { text-align: center; font: 22px 'Bebas Neue', sans-serif; color: #ffd700; }
+.result-match-editor { padding: 16px; border-top: 1px solid #243046; }
+.result-score-inputs { display: flex; gap: 12px; margin-bottom: 14px; }
+.result-score-inputs label { flex: 1; min-width: 0; display: grid; gap: 6px; font: 14px 'Rajdhani', sans-serif; overflow-wrap: anywhere; }
+.result-score-inputs input { box-sizing: border-box; width: 100%; padding: 10px; background: #070b12; color: #ffd700; border: 1px solid #34465d; border-radius: 7px; }
+.results-error { color: #ffac94; font: 14px 'Rajdhani', sans-serif; }
+.results-squad { background: #0b111c; border: 1px solid #243046; border-radius: 12px; padding: 20px; }
+.results-squad-list { list-style: none; padding: 0; margin: 0; }
+.results-squad-list li { display: grid; grid-template-columns: 35px 48px minmax(0,1fr) auto; gap: 12px; padding: 12px 0; border-top: 1px solid #1b2637; align-items: center; font: 14px 'Rajdhani', sans-serif; }
+.results-squad-list strong { overflow-wrap: anywhere; }
+.results-player-row { display: grid; grid-template-columns: 36px 46px minmax(0,1fr) minmax(80px,130px) auto; align-items: center; gap: 10px; padding: 12px; border-bottom: 1px solid #243046; font: 14px 'Rajdhani', sans-serif; }
+.results-player-row strong { display: block; overflow-wrap: anywhere; }
+.results-player-row .results-player-action { padding: 8px 10px; border: 1px solid #3a526a; background: #101925; color: #8fe7c0; border-radius: 7px; cursor: pointer; }
+.results-standings table { min-width: 0 !important; }
+.results-standings .standings-extra { display: none; }
+.results-standings--expanded .standings-extra { display: table-cell; }
+.results-standings--expanded .standings-placement { display: block; }
+.standings-placement { display: none; }
+.results-deadline-grid { min-width: 0 !important; width: 100%; }
+.results-penalty-row { min-width: 0; }
+@media (max-width: 700px) {
+  .results-shell { padding: 14px 10px 32px; }
+  .results-header h1 { font-size: 27px; }
+  .results-header { align-items: flex-start; }
+  .results-nav { gap: 2px; }
+  .results-nav button { padding: 10px; }
+  .results-page .result-match-summary { grid-template-columns: minmax(0,1fr) 60px minmax(0,1fr); gap: 8px; padding: 12px; }
+  .result-match-state { grid-column: 1 / 2; font-size: 12px; }
+  .result-match-disclosure { grid-column: 2 / -1; text-align: right; font-size: 12px; }
+  .results-squad { padding: 14px; }
+  .results-squad-list li { gap: 8px; }
+  .results-player-row { grid-template-columns: 30px 36px minmax(0,1fr) auto; gap: 7px; padding: 10px 0; }
+  .results-player-owner { grid-column: 3; grid-row: 2; }
+  .results-player-action { grid-column: 4; grid-row: 1 / 3; }
+  .results-player-price { font-size: 12px; }
+  .results-penalty-row { grid-template-columns: minmax(0,1fr) !important; }
+  .results-standings th, .results-standings td { padding: 10px 5px !important; }
+}

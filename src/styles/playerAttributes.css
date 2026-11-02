@@ -1,0 +1,27 @@
+.player-attributes { grid-column: 1 / -1; min-width: 0; border-top: 1px solid #2a3547; margin-top: 4px; padding: 14px 4px 6px; color: #e4ecf7; font-family: 'Exo 2', system-ui, sans-serif; }
+.player-attributes dl { margin: 0; }
+.player-attributes dt { color: #a7b6cc; font-size: 12px; line-height: 1.5; font-weight: 500; }
+.player-attributes dd { margin: 4px 0 0; font-size: 14px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.player-attributes__identity { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-bottom: 14px; }
+.player-attributes .player-attributes__stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.player-attribute { --stat-color: #b6c4d7; background: #121b29; border: 1px solid #2b3a50; border-radius: 9px; padding: 10px 12px; min-width: 0; }
+.player-attribute--exceptional { --stat-color: #8fe7c0; border-color: #8fe7c04a; }
+.player-attribute--strong { --stat-color: #92d5fa; }
+.player-attribute--solid { --stat-color: #d3deec; }
+.player-attribute--lower { --stat-color: #f0c990; }
+.player-attributes .player-attribute dd { margin-top: 3px; font-size: 27px; font-weight: 750; line-height: 1.2; color: var(--stat-color); font-variant-numeric: tabular-nums; }
+.player-attribute__track { height: 3px; margin-top: 10px; background: #ffffff10; border-radius: 3px; overflow: hidden; }
+.player-attribute__track span { display: block; height: 100%; background: var(--stat-color); border-radius: inherit; }
+.player-attributes .player-attributes__metadata { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.player-attributes__star { color: #f3d16a; }
+@media (max-width: 1100px) {
+  .player-attributes .player-attributes__stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .player-attributes { padding: 12px 0 4px; }
+  .player-attributes .player-attributes__stats { gap: 7px; }
+  .player-attribute { padding: 10px 8px; }
+  .player-attributes .player-attributes__metadata { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .player-attributes__identity { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .player-attributes__identity > :last-child { grid-column: 1 / -1; }
+}

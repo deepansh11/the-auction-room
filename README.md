@@ -1,19 +1,29 @@
 # FC Draft Bidding Room
 
-A turn-based FC draft auction app with shared rooms, multi-device participation, Firebase-backed auth, Firestore persistence, and live session sync through the backend API.
+A turn-based FC draft auction app with shared rooms, multi-device participation, JWT authentication, Firestore persistence, and authenticated Socket.IO session synchronization.
+
+See [the real-time engineering report](docs/real-time-engineering.md) for the command protocol, test results, recovery model, and coordinated deployment instructions.
+
+See [Auction focus mode](docs/auction-focus-mode.md) for the simplified auction interface, responsive layout, asset/bundle measurements, and browser regression checks.
+
+See [Results screen cleanup](docs/results-focus-mode.md) for the focused squads/standings/matches/transfers layout and explicit score-saving workflow.
+
+Player match stats now use manual goals/assists entry only. Ballon d’Or points are `goals + 0.75 × assists + Σ floor(player goals in each match / 3)`; ratings and POTM no longer contribute. See [manual match stats](docs/manual-match-stats.md) for legacy-data behavior and deployment notes.
+
+Squad owners can save an FC 26 ISL club association, displayed on fixtures without renaming account identities. Group-stage setup supports one, two or three legs. See [ISL clubs and three-leg fixtures](docs/isl-clubs-fixtures.md).
 
 ## What This Repository Contains
 
 - Frontend app: React + Vite, using `React.createElement()`.
 - Backend API: Express service for Firebase Auth and Firestore-backed room/session persistence.
-- Main app implementation in `src/app/App.jsx` with compatibility re-export at `fc-draft-v4.jsx`.
+- Main app implementation in `src/app/App.jsx`.
 
 ## Features
 
-- Firebase-backed register/login flow.
+- Register/login using bcrypt password hashes in Firestore and backend-issued JWTs.
 - Shareable room links and room codes.
 - Cross-profile and cross-incognito room/session sharing through backend persistence.
-- Auction setup for 2-8 participants.
+- Auction setup for 2-10 participants.
 - CSV-driven player pool from `public/data/FC26 Data Sept 21 2025.csv`.
 - Setup controls for player inclusion/exclusion, tier rules, and per-bidder budget.
 - Host-controlled lot opening and progression.
@@ -29,7 +39,7 @@ A turn-based FC draft auction app with shared rooms, multi-device participation,
 - `src/app/App.jsx`: root app orchestration.
 - `src/screens/AuthScreen.jsx`: backend-driven auth UI.
 - `src/screens/SetupScreen.jsx`: auction/session creation.
-- `src/screens/BiddingScreen.jsx`: live bidding flow with session polling.
+- `src/screens/BiddingScreen.jsx`: authoritative draft commands; socket snapshots/deltas with HTTP fallback only when synchronization is unhealthy.
 - `src/screens/ResultsScreen.jsx`: completed draft view.
 - `src/screens/Dashboard.jsx`: active auctions and past results.
 - `src/lib/api.js`: frontend API client for auth, rooms, sessions, results, and wishlists.
@@ -49,11 +59,10 @@ A turn-based FC draft auction app with shared rooms, multi-device participation,
 
 You need one Firebase project with:
 
-1. Firebase Authentication enabled.
-   Use `Email/Password` sign-in.
+1. The current backend uses custom JWT authentication and Firestore user records, not Firebase Authentication.
 2. Cloud Firestore enabled.
 3. A service account key for the backend.
-4. A Firebase Web API key for backend login via Identity Toolkit.
+4. `FIREBASE_WEB_API_KEY` is a legacy environment variable; the current auth routes do not use Identity Toolkit.
 
 ### Backend Environment
 
@@ -247,7 +256,8 @@ npm run dev
 
 - `GET /api/sessions?username=<name>`
 - `GET /api/sessions/:id`
-- `PUT /api/sessions/:id`
+- `POST /api/sessions/:id/actions`
+- `PUT /api/sessions/:id` is retired and returns `CLIENT_UPGRADE_REQUIRED`; reload old clients.
 
 ### Results
 
@@ -262,7 +272,7 @@ npm run dev
 
 ## Security Notes
 
-- Backend verifies Firebase ID tokens for protected routes.
+- Backend verifies its own signed JWTs for protected HTTP routes and socket connections.
 - CORS allowlist is controlled through `CORS_ORIGINS`.
 - Rate limiting and `helmet` are enabled.
 - `.env` files should not be committed.

@@ -1,4 +1,5 @@
 import { shuffleArray } from "../utils/random.js";
+import { expandFixtureLegs, fixtureLegCount } from "../../backend/shared/fixtureLegs.js";
 
 const GROUP_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
@@ -122,6 +123,7 @@ function generateBalancedExtra(teams, extraPerTeam, idxOffset, label, roundOffse
  *
  * leg = "double" (default) — home + away leg for every pair.
  * leg = "single"           — one match per pair.
+ * leg = "triple"           — three matches per pair, with the third repeating the first orientation.
  *
  * When groups differ in size (e.g. 9 players → groups of 5 and 4), teams in
  * smaller groups receive extra "padding" fixtures so every team plays the same
@@ -136,7 +138,7 @@ function generateBalancedExtra(teams, extraPerTeam, idxOffset, label, roundOffse
 export function buildGroupFixtures(groups, leg = "double") {
   const allSizes = Object.values(groups || {}).map((t) => (t || []).filter(Boolean).length);
   const maxSize = allSizes.length > 0 ? Math.max(...allSizes) : 0;
-  const legFactor = leg === "double" ? 2 : 1;
+  const legFactor = fixtureLegCount(leg);
   let targetPerTeam = legFactor * Math.max(maxSize - 1, 0);
 
   // If any odd-sized group would receive an odd number of extra fixtures, bump the
@@ -159,24 +161,7 @@ export function buildGroupFixtures(groups, leg = "double") {
     const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
 
     // Build the base fixtures (single or double leg).
-    const base = [];
-    if (leg === "double") {
-      single.forEach((f, i) => {
-        base.push({ id: `${label}-${i * 2}`, ...f, homeGoals: null, awayGoals: null });
-        base.push({
-          id: `${label}-${i * 2 + 1}`,
-          round: f.round + maxRound,
-          home: f.away,
-          away: f.home,
-          homeGoals: null,
-          awayGoals: null,
-        });
-      });
-    } else {
-      single.forEach((f, i) => {
-        base.push({ id: `${label}-${i}`, ...f, homeGoals: null, awayGoals: null });
-      });
-    }
+    const base = expandFixtureLegs(single, label, legFactor);
 
     // Equalise: add extra fixtures so this group's teams reach targetPerTeam.
     const currentPerTeam = legFactor * (cleanTeams.length - 1);
@@ -189,7 +174,7 @@ export function buildGroupFixtures(groups, leg = "double") {
     }
 
     if (extraPerTeam > 0) {
-      const roundOffset = leg === "double" ? maxRound * 2 : maxRound;
+      const roundOffset = maxRound * legFactor;
       const extra = generateBalancedExtra(cleanTeams, extraPerTeam, base.length, label, roundOffset);
       fixtures[label] = [...base, ...extra];
     } else {

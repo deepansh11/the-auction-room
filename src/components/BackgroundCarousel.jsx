@@ -1,7 +1,7 @@
 import React from "react";
 import { FOOTBALL_THEME } from "../theme/footballTheme.js";
 
-import bg1 from "../assets/263832-3840x2160-desktop-4k-football-stadium-wallpaper.jpg";
+import bg1 from "../assets/stadium-background.webp";
 import bg2 from "../assets/4a982bd7c8e2725d44fbd4a5e48008bd.jpg";
 import bg3 from "../assets/6e5d1c70f357802f03082386fb560f67.jpg";
 import bg4 from "../assets/9f74601ef562f2052b26c1b36211eae5.jpg";
@@ -10,15 +10,23 @@ import bg6 from "../assets/acf43a6379c220d72288d01b7c1f04d2.jpg";
 
 const slides = [bg1, bg2, bg3, bg4, bg5, bg6];
 
-export function BackgroundCarousel({ intervalMs = 7000 }) {
+export function BackgroundCarousel({ intervalMs = 7000, paused = false }) {
   const [index, setIndex] = React.useState(0);
+  const [reducedMotion, setReducedMotion] = React.useState(() => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches);
+  React.useEffect(() => {
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReducedMotion(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   React.useEffect(() => {
+    if (paused || reducedMotion) return;
     const timer = window.setInterval(() => {
-      setIndex((current) => (current + 1) % slides.length);
+      if (!document.hidden) setIndex((current) => (current + 1) % slides.length);
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [intervalMs]);
+  }, [intervalMs, paused, reducedMotion]);
 
   return React.createElement("div", {
     style: {
@@ -30,7 +38,7 @@ export function BackgroundCarousel({ intervalMs = 7000 }) {
       background: FOOTBALL_THEME.background,
     }
   },
-    slides.map((src, slideIndex) => React.createElement("div", {
+    slides.map((src, slideIndex) => slideIndex !== index && (paused || reducedMotion || slideIndex !== (index + slides.length - 1) % slides.length) ? null : React.createElement("div", {
       key: src,
       style: {
         position: "absolute",
@@ -39,8 +47,8 @@ export function BackgroundCarousel({ intervalMs = 7000 }) {
         backgroundSize: "cover",
         backgroundPosition: "center",
         opacity: slideIndex === index ? 1 : 0,
-        transform: slideIndex === index ? "scale(1.05)" : "scale(1.12)",
-        transition: "opacity 1.2s ease, transform 8s ease",
+        transform: paused || reducedMotion ? "none" : slideIndex === index ? "scale(1.05)" : "scale(1.12)",
+        transition: paused || reducedMotion ? "none" : "opacity 1.2s ease, transform 8s ease",
         filter: "saturate(1.08) contrast(1.02) brightness(0.45)",
       }
     })),

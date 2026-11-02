@@ -93,7 +93,7 @@ async function loadCatalogMap() {
 
 export async function getPlayerCatalog() {
   if (!catalogPromise) {
-    catalogPromise = loadCatalogMap();
+    catalogPromise = loadCatalogMap().catch(error => { catalogPromise = null; throw error; });
   }
   return catalogPromise;
 }

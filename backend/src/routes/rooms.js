@@ -3,11 +3,12 @@ import { z } from "zod";
 import { requireUserAuth } from "../middleware/userAuth.js";
 import { normalizeFirebaseError } from "../services/firebaseErrors.js";
 import { getFirebase } from "../services/firebaseService.js";
-import { persistCompletedSessionResult } from "../services/sessionPersistence.js";
 import { enrichPlayersWithCatalog, getPlayersByIds } from "../services/playerCatalog.js";
 import { buildSessionBackupPayload, normalizeAuctionResultDocument, normalizeSessionDocument } from "../services/sessionState.js";
-import { emitSessionClosed, emitSessionUpdate } from "../services/realtime.js";
-import { rerollMysteryCandidates } from "../services/mysteryCard.js";
+import { emitSessionAction, emitSessionClosed, emitSessionUpdate } from "../services/realtime.js";
+import { processSessionAction } from "../services/sessionActions.js";
+import { mutateSession } from "../services/sessionMutation.js";
+import { normalizeFixtureLeg } from "../../shared/fixtureLegs.js";
 import { generateAuctionSetup } from "../services/gameSetup.js";
 import { isSessionParticipant, sanitizeRoomPreview, sanitizeSessionForViewer } from "../services/sessionView.js";
 
@@ -29,7 +30,7 @@ const tierSchema = z.object({
 // pools/candidates, groups/fixtures) is generated server-side from this spec — the host never
 // computes or sees any of it themselves, same as every other participant.
 const roomSpecSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().min(1).max(160).refine(id => !id.includes("/")),
   roomCode: roomCodeSchema,
   name: z.string().min(1).max(120),
   budgetPerBidder: z.number().positive(),
@@ -39,12 +40,12 @@ const roomSpecSchema = z.object({
     name: z.string().optional(),
     rating: z.number(),
     pos: z.string(),
-  })).min(1),
-  participantNames: z.array(z.string().min(1)).min(2),
+  })).min(1).max(5000).refine(players => new Set(players.map(p => p.id)).size === players.length, "Duplicate player IDs"),
+  participantNames: z.array(z.string().trim().min(1).max(40)).min(2).max(50).refine(names => new Set(names.map(name => name.toLowerCase())).size === names.length, "Duplicate participants"),
   mysteryEnabled: z.boolean().optional(),
   groupsEnabled: z.boolean().optional(),
   groupCount: z.number().optional(),
-  fixtureLeg: z.enum(["single", "double"]).optional(),
+  fixtureLeg: z.enum(["single", "double", "triple"]).optional(),
   knockoutFormat: z.enum(["semiFinal", "quarterFinal", "finalOnly"]).optional(),
 });
 
@@ -212,51 +213,12 @@ async function buildTransferAuctionPool(sourceResult, transferSession) {
   return Array.from(byId.values());
 }
 
-async function clearStaleTransferWindowState(db, session) {
-  const sourceResultId = String(
-    session?.transferWindow?.sourceResultId
-    || session?.transferWindow?.sourceSessionId
-    || ""
-  ).trim();
-  if (!sourceResultId) return;
-
-  const resultRef = db.collection("auctionResults").doc(sourceResultId);
-  const resultSnap = await resultRef.get();
-  if (!resultSnap.exists) return;
-
-  const result = normalizeAuctionResultDocument(resultSnap.data());
-  const activeSessionId = String(result.transferWindow?.activeSessionId || "");
-  if (!activeSessionId || activeSessionId !== String(session.id)) return;
-
-  await resultRef.set({
-    transferWindow: {
-      ...(result.transferWindow || {}),
-      activeSessionId: "",
-      phase: "locked",
-      closedAt: Date.now(),
-    },
-    updatedAt: Date.now(),
-  }, { merge: true });
-}
-
-async function cleanupLiveSession(db, session) {
-  if (!session?.id) return;
-  const batch = db.batch();
-  const sessionRef = db.collection("sessions").doc(String(session.id));
-  batch.delete(sessionRef);
-  if (session.roomCode) {
-    const roomRef = db.collection("rooms").doc(String(session.roomCode).toUpperCase());
-    batch.delete(roomRef);
-  }
-  await batch.commit();
-  await clearStaleTransferWindowState(db, session);
-}
-
 router.post("/rooms", requireUserAuth, async (req, res) => {
   try {
     const spec = roomSpecSchema.parse(req.body?.spec);
     const host = String(req.user?.username || "").trim();
     if (!host) return res.status(400).json({ error: "Invalid user" });
+    if (!spec.participantNames.includes(host)) return res.status(400).json({ error: "Host must have a participant seat" });
 
     const roomCode = spec.roomCode.toUpperCase();
     const groupCount = Math.max(1, Math.floor(Number(spec.groupCount) || 1));
@@ -265,11 +227,13 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
     // the host's browser never computes (and is never shown) the lot assignment,
     // pick sequence, or Mystery Card pools/candidates. They receive exactly the same
     // zero-information "draw phase" view as everyone else once this is stored.
-    const fixtureLeg = spec.fixtureLeg === "single" ? "single" : "double";
+    const fixtureLeg = normalizeFixtureLeg(spec.fixtureLeg, "double");
     const knockoutFormat = ["semiFinal", "quarterFinal", "finalOnly"].includes(spec.knockoutFormat)
       ? spec.knockoutFormat : "semiFinal";
+    const selectedPlayers = await getPlayersByIds(spec.selectedPlayers.map(player => player.id));
+    if (selectedPlayers.length !== spec.selectedPlayers.length) return res.status(400).json({ error: "Player selection contains IDs outside the server catalogue" });
     const setup = generateAuctionSetup({
-      selectedPlayers: spec.selectedPlayers,
+      selectedPlayers,
       tiers: spec.tiers,
       participantNames: spec.participantNames,
       mysteryEnabled: Boolean(spec.mysteryEnabled),
@@ -326,8 +290,14 @@ router.post("/rooms", requireUserAuth, async (req, res) => {
       });
     }
 
-    await db.collection("sessions").doc(String(session.id)).set(session, { merge: true });
-    await db.collection("rooms").doc(roomCode).set({ sessionId: String(session.id), roomCode, updatedAt: now }, { merge: true });
+    await db.runTransaction(async transaction => {
+      const sessionRef = db.collection("sessions").doc(String(session.id));
+      const roomRef = db.collection("rooms").doc(roomCode);
+      const [existingSession, existingRoom] = await Promise.all([transaction.get(sessionRef), transaction.get(roomRef)]);
+      if (existingSession.exists || existingRoom.exists) throw Object.assign(new Error("Session ID or room code is already in use"), { status: 409 });
+      transaction.set(sessionRef, { ...session, revision: 0 });
+      transaction.set(roomRef, { sessionId: String(session.id), roomCode, updatedAt: now });
+    });
     emitSessionUpdate(session);
 
     return res.status(201).json({ session: sanitizeSessionForViewer(session, host) });
@@ -364,14 +334,15 @@ router.get("/rooms/:roomCode", requireUserAuth, async (req, res) => {
 router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
   try {
     const roomCode = roomCodeSchema.parse(String(req.params.roomCode || "").toUpperCase());
-    const username = String(req.body?.username || "").trim();
-    if (!username) return res.status(400).json({ error: "username is required" });
+    const requestedUsername = String(req.body?.username || "").trim();
+    const username = String(req.user?.username || "").trim();
+    if (!requestedUsername) return res.status(400).json({ error: "username is required" });
 
     // A caller must only ever be able to join/act as their own authenticated identity — otherwise
     // anyone could pass someone else's name in the body and read that participant's session view
     // (including their Mystery Card candidate) without ever proving they own that account.
     const authUsername = String(req.user?.username || "").trim();
-    if (!authUsername || authUsername.toLowerCase() !== username.toLowerCase()) {
+    if (!authUsername || authUsername.toLowerCase() !== requestedUsername.toLowerCase()) {
       return res.status(403).json({ error: "You can only join a room as your own account" });
     }
 
@@ -379,21 +350,13 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
     const roomDoc = await db.collection("rooms").doc(roomCode).get();
     if (!roomDoc.exists) return res.status(404).json({ error: "Room not found" });
 
-    const sessionRef = db.collection("sessions").doc(String(roomDoc.data()?.sessionId));
-    const sessionSnap = await sessionRef.get();
-    if (!sessionSnap.exists) {
-      await db.collection("rooms").doc(roomCode).delete();
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    const session = normalizeSessionDocument(sessionSnap.data());
+    const joined = await mutateSession(db, String(roomDoc.data()?.sessionId), session => {
     const participants = Array.isArray(session.participants) ? [...session.participants] : [];
     const baseBudget = Number(session?.budgetPerBidder || 0);
 
     const exactIdx = participants.findIndex((p) => p.name === username);
     if (exactIdx >= 0) {
-      emitSessionUpdate(session);
-      return res.json({ session: sanitizeSessionForViewer(session, username) });
+      return session;
     }
 
     const caseInsensitiveIdx = participants.findIndex(
@@ -408,12 +371,11 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         sequence: replaceNameInSequence(session.sequence, previousName, username),
         mysteryPools: renameMysteryKey(session.mysteryPools, previousName, username),
         mysteryCurrent: renameMysteryKey(session.mysteryCurrent, previousName, username),
+        mysteryUsed: renameMysteryKey(session.mysteryUsed, previousName, username),
         groups: renameInGroups(session.groups, previousName, username),
         fixtures: renameInFixtures(session.fixtures, previousName, username),
       });
-      await sessionRef.set(normalized, { merge: true });
-      emitSessionUpdate(normalized);
-      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
+      return normalized;
     }
 
     const placeholderIdx = participants.findIndex((p) => isPlaceholderName(p?.name));
@@ -426,12 +388,11 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         sequence: replaceNameInSequence(session.sequence, previousName, username),
         mysteryPools: renameMysteryKey(session.mysteryPools, previousName, username),
         mysteryCurrent: renameMysteryKey(session.mysteryCurrent, previousName, username),
+        mysteryUsed: renameMysteryKey(session.mysteryUsed, previousName, username),
         groups: renameInGroups(session.groups, previousName, username),
         fixtures: renameInFixtures(session.fixtures, previousName, username),
       });
-      await sessionRef.set(normalized, { merge: true });
-      emitSessionUpdate(normalized);
-      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
+      return normalized;
     }
 
     // Host should always be able to rejoin a room they created, even if their participant entry is missing.
@@ -446,15 +407,14 @@ router.post("/rooms/:roomCode/join", requireUserAuth, async (req, res) => {
         participants: nextParticipants,
         sequence: nextSequence,
       });
-      await sessionRef.set(normalized, { merge: true });
-      emitSessionUpdate(normalized);
-      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
+      return normalized;
     }
 
     const expectedNames = participants.map((p) => p.name).join(", ");
-    return res.status(409).json({
-      error: `No open seat for '${username}'. Ask host to add your exact username in setup. Expected participants: ${expectedNames}`,
+    throw Object.assign(new Error(`No open seat for '${username}'. Ask host to add your exact username in setup. Expected participants: ${expectedNames}`), { status: 409 });
     });
+    emitSessionUpdate(joined);
+    return res.json({ session: sanitizeSessionForViewer(joined, username) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to join room", 400);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -478,6 +438,7 @@ router.get("/sessions", requireUserAuth, async (req, res) => {
     byParticipantSnap.docs.forEach((d) => map.set(d.id, d.data()));
 
     const sessions = Array.from(map.values())
+      .filter(session => ["draw", "active", "transfer"].includes(session.status))
       .map((session) => normalizeSessionDocument(session))
       .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0))
       .map((s) => sanitizeSessionForViewer(s, username));
@@ -570,16 +531,22 @@ router.post("/sessions/restore", requireUserAuth, async (req, res) => {
       host: username,
       roomCode,
       updatedAt: Date.now(),
+      revision: Number(restored.revision || 0) + 1,
     });
 
-    const batch = db.batch();
-    batch.set(db.collection("sessions").doc(String(restoredSession.id)), restoredSession, { merge: true });
-    batch.set(roomRef, {
+    await db.runTransaction(async transaction => {
+    const sessionRef = db.collection("sessions").doc(String(restoredSession.id));
+    const [live, room] = await Promise.all([transaction.get(sessionRef), transaction.get(roomRef)]);
+    if (live.exists || (room.exists && room.data().sessionId !== restoredSession.id)) {
+      throw Object.assign(new Error("Restore cannot overwrite an existing session or room"), { status: 409 });
+    }
+    transaction.set(sessionRef, restoredSession);
+    transaction.set(roomRef, {
       sessionId: String(restoredSession.id),
       roomCode,
       updatedAt: Date.now(),
-    }, { merge: true });
-    await batch.commit();
+    });
+    });
 
     emitSessionUpdate(restoredSession);
     return res.status(201).json({ session: sanitizeSessionForViewer(restoredSession, username) });
@@ -592,17 +559,13 @@ router.post("/sessions/restore", requireUserAuth, async (req, res) => {
 router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, res) => {
   try {
     const { db } = getFirebase();
-    const sessionRef = db.collection("sessions").doc(String(req.params.id));
-    const snap = await sessionRef.get();
-    if (!snap.exists) return res.status(404).json({ error: "Session not found" });
-
-    const session = normalizeSessionDocument(snap.data());
     const username = String(req.user?.username || "").trim();
+    const nextSession = await mutateSession(db, req.params.id, async (session, transaction) => {
     if (!username || session.host !== username) {
-      return res.status(403).json({ error: "Only the host can open the transfer market" });
+      throw Object.assign(new Error("Only the host can open the transfer market"), { status: 403 });
     }
     if (session.status !== "transfer" || session.transferWindow?.phase !== "selling") {
-      return res.status(409).json({ error: "Transfer market can only open from the selling phase" });
+      throw Object.assign(new Error("Transfer market can only open from the selling phase"), { status: 409 });
     }
 
     const participants = Array.isArray(session.participants) ? session.participants : [];
@@ -612,24 +575,24 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
     for (const participant of participants) {
       const soldPlayers = Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [];
       if (soldPlayers.length < requiredSalesMin || soldPlayers.length > requiredSalesMax) {
-        return res.status(409).json({ error: `${participant.name} must sell between ${requiredSalesMin} and ${requiredSalesMax} players before the market opens` });
+        throw Object.assign(new Error(`${participant.name} must sell between ${requiredSalesMin} and ${requiredSalesMax} players before the market opens`), { status: 409 });
       }
     }
 
     const sourceResultId = String(session.transferWindow?.sourceResultId || session.transferWindow?.sourceSessionId || "");
     if (!sourceResultId) {
-      return res.status(409).json({ error: "Original auction result is missing for this transfer session" });
+      throw Object.assign(new Error("Original auction result is missing for this transfer session"), { status: 409 });
     }
 
-    const sourceResultSnap = await db.collection("auctionResults").doc(sourceResultId).get();
+    const sourceResultSnap = await transaction.get(db.collection("auctionResults").doc(sourceResultId));
     if (!sourceResultSnap.exists) {
-      return res.status(404).json({ error: "Original auction result not found" });
+      throw Object.assign(new Error("Original auction result not found"), { status: 404 });
     }
 
     const sourceResult = normalizeAuctionResultDocument(sourceResultSnap.data());
     const transferPlayerPool = await buildTransferAuctionPool(sourceResult, session);
     if (transferPlayerPool.length === 0) {
-      return res.status(409).json({ error: "No eligible players available for the transfer market" });
+      throw Object.assign(new Error("No eligible players available for the transfer market"), { status: 409 });
     }
 
     const listingDeadlineAt = Number(session.transferWindow?.listingDeadlineAt || sourceResult.transferWindow?.listingDeadlineAt || 0);
@@ -638,7 +601,7 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
       return soldPlayers.length >= requiredSalesMin && soldPlayers.length <= requiredSalesMax;
     });
     if (Number.isFinite(listingDeadlineAt) && listingDeadlineAt > 0 && Date.now() < listingDeadlineAt && !everyoneCompletedListings) {
-      return res.status(409).json({ error: "Wait until the transfer listing deadline ends before opening the market" });
+      throw Object.assign(new Error("Wait until the transfer listing deadline ends before opening the market"), { status: 409 });
     }
 
     const setup = generateAuctionSetup({
@@ -668,7 +631,7 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
       budget: carriedBudgets[participant.name],
     }));
 
-    const nextSession = normalizeSessionDocument({
+    const updated = normalizeSessionDocument({
       ...session,
       participants: nextParticipants,
       expectedBudgets: buildExpectedBudgets(nextParticipants),
@@ -713,7 +676,8 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
       updatedAt: Date.now(),
     });
 
-    await sessionRef.set(nextSession, { merge: true });
+    return updated;
+    });
     emitSessionUpdate(nextSession);
     return res.json({ session: sanitizeSessionForViewer(nextSession, username) });
   } catch (err) {
@@ -722,128 +686,21 @@ router.post("/sessions/:id/transfer/open-market", requireUserAuth, async (req, r
   }
 });
 
-router.put("/sessions/:id", requireUserAuth, async (req, res) => {
+router.post("/sessions/:id/actions", requireUserAuth, async (req, res) => {
   try {
-    const session = req.body?.session;
-    if (!session || !session.id) return res.status(400).json({ error: "session payload is required" });
-
-    const { db } = getFirebase();
-    const sessionRef = db.collection("sessions").doc(String(req.params.id));
-    const existingSnap = await sessionRef.get();
-    if (!existingSnap.exists) return res.status(404).json({ error: "Session not found" });
-
-    const existing = normalizeSessionDocument(existingSnap.data());
-    const username = String(req.user?.username || "").trim();
-    if (!isSessionParticipant(existing, username)) {
-      return res.status(403).json({ error: "You are not part of this session" });
-    }
-
-    // playerPool / shuffledPlayers / mysteryPools are server-owned from the moment the room is
-    // created onward: a client is never allowed to overwrite them (this is what previously let
-    // any participant's browser push — and therefore see — the full, unfiltered pool for every
-    // lot, opened or not). Only the lot/turn/participant bookkeeping fields come from the client.
-    const mergedLotIdx = Number(session.lotIdx ?? existing.lotIdx ?? 0);
-    const existingLotIdx = Number(existing.lotIdx ?? 0);
-    const mergedStatus = session.status || existing.status;
-    const mergedMysteryUsed = session.mysteryUsed && typeof session.mysteryUsed === "object"
-      ? session.mysteryUsed
-      : (existing.mysteryUsed || {});
-
-    // Mystery Card candidates are re-rolled on lot transition, and also refreshed whenever a
-    // participant's own current candidate has been picked by them (deduplication: same user
-    // cannot get the same player via regular pick AND mystery card).
-    let mysteryCurrent = (existing.mysteryEnabled && mergedStatus === "active" && mergedLotIdx !== existingLotIdx)
-      ? rerollMysteryCandidates(existing.mysteryPools || {}, mergedMysteryUsed)
-      : { ...(existing.mysteryCurrent || {}) };
-
-    if (existing.mysteryEnabled) {
-      const newParticipants = Array.isArray(session.participants) ? session.participants : [];
-      newParticipants.forEach((p) => {
-        if (mergedMysteryUsed[p.name]) return; // already used card
-        const candidateId = mysteryCurrent[p.name];
-        if (candidateId == null) return;
-        const ownedIds = new Set((p.squad || []).map((pl) => Number(pl.id)));
-        if (ownedIds.has(Number(candidateId))) {
-          // Their candidate was just picked by them — pick a new one excluding all their squad
-          const pool = (existing.mysteryPools?.[p.name] || []).filter(
-            (id) => !ownedIds.has(Number(id))
-          );
-          if (pool.length > 0) {
-            mysteryCurrent[p.name] = pool[Math.floor(Math.random() * pool.length)];
-          } else {
-            delete mysteryCurrent[p.name];
-          }
-        }
-      });
-    }
-
-    // lotOrder never changes after creation — it's server-generated once and reused for the
-    // whole game, so no client input for it is ever trusted, at any status.
-    const lotOrder = existing.lotOrder || [];
-
-    // sequence (pick/turn order) stays hidden during the draw screen, but once bidding is active
-    // it becomes legitimate, client-driven gameplay state (rotated every lot). So it's only
-    // locked to the server's stored copy while still in the draw phase.
-    const sequence = mergedStatus === "draw"
-      ? (existing.sequence || [])
-      : (Array.isArray(session.sequence) ? session.sequence : (existing.sequence || []));
-
-    // The draw screen now only reveals the pick sequence step-by-step. Lot order is fixed
-    // sequentially, so keep it fully revealed while still clamping pick-order progress.
-    const totalToReveal = (Array.isArray(existing.participants) ? existing.participants.length : 0)
-      || lotOrder.length;
-    const existingRevealedPickCount = Number(existing.revealedPickCount || 0);
-    const revealedPickCount = Math.max(0, Math.min(
-      Number(session.revealedPickCount ?? existingRevealedPickCount) || 0,
-      existingRevealedPickCount + 1,
-      totalToReveal
-    ));
-
-    const optimizedSession = normalizeSessionDocument({
-      ...existing,
-      ...session,
-      id: existing.id,
-      roomCode: existing.roomCode,
-      playerPool: existing.playerPool || [],
-      shuffledPlayers: existing.shuffledPlayers || [],
-      lotOrder,
-      sequence,
-      revealedLotCount: lotOrder.length,
-      revealedPickCount,
-      mysteryEnabled: Boolean(existing.mysteryEnabled),
-      mysteryPools: existing.mysteryPools || {},
-      mysteryUsed: mergedMysteryUsed,
-      mysteryCurrent,
-      participantNames: Array.isArray(session?.participants)
-        ? reconcileParticipantNames({
-            ...existing,
-            participantNames: existing.participantNames || [],
-            participants: session.participants,
-          })
-        : (existing.participantNames || []),
-      updatedAt: Date.now(),
-    });
-
-    if (optimizedSession.status === "complete") {
-      await persistCompletedSessionResult(db, optimizedSession);
-      emitSessionClosed(optimizedSession, "complete");
-      await cleanupLiveSession(db, optimizedSession);
-      return res.status(204).send();
-    }
-
-    if (optimizedSession.status === "cancelled") {
-      emitSessionClosed(optimizedSession, "cancelled");
-      await cleanupLiveSession(db, optimizedSession);
-      return res.status(204).send();
-    }
-
-    await sessionRef.set(optimizedSession, { merge: true });
-    emitSessionUpdate(optimizedSession);
-    return res.status(204).send();
-  } catch (err) {
-    const normalized = normalizeFirebaseError(err, "Failed to update session", 500);
-    return res.status(normalized.status).json({ error: normalized.error });
+    const result = await processSessionAction({ db: getFirebase().db, sessionId: req.params.id, user: req.user, command: req.body?.command });
+    emitSessionAction(result);
+    const view = sanitizeSessionForViewer(result.session, req.user.username);
+    return res.json({ ok: true, event: result.event, privateState: { sessionId: view.id, revision: view.revision, mysteryCurrent: view.mysteryCurrent } });
+  } catch (error) {
+    return res.status(error.status || 503).json({ error: error.status ? error.message : "Session action failed", code: error.code || "REQUEST_FAILED" });
   }
+});
+
+// Broad client-state mutations are deliberately retired: keeping this writer enabled would
+// let old clients bypass transactions and overwrite validated budgets/squads. Reload to migrate.
+router.put("/sessions/:id", requireUserAuth, (_req, res) => {
+  return res.status(409).json({ error: "Please reload the app to use authoritative session commands", code: "CLIENT_UPGRADE_REQUIRED" });
 });
 
 router.post("/rooms/:roomCode/readmit", requireUserAuth, async (req, res) => {
@@ -858,24 +715,19 @@ router.post("/rooms/:roomCode/readmit", requireUserAuth, async (req, res) => {
     const roomDoc = await db.collection("rooms").doc(roomCode).get();
     if (!roomDoc.exists) return res.status(404).json({ error: "Room not found" });
 
-    const sessionRef = db.collection("sessions").doc(String(roomDoc.data()?.sessionId));
-    const sessionSnap = await sessionRef.get();
-    if (!sessionSnap.exists) return res.status(404).json({ error: "Session not found" });
-
-    const session = normalizeSessionDocument(sessionSnap.data());
+    const readmitted = await mutateSession(db, String(roomDoc.data()?.sessionId), session => {
     if (session.host !== hostUsername) {
-      return res.status(403).json({ error: "Only the host can readmit players" });
+      throw Object.assign(new Error("Only the host can readmit players"), { status: 403 });
     }
 
     const participants = Array.isArray(session.participants) ? [...session.participants] : [];
     if (participants.some((p) => p.name === targetUsername)) {
-      emitSessionUpdate(session);
-      return res.json({ session: sanitizeSessionForViewer(session, hostUsername) });
+      return session;
     }
 
     const wasAbandoned = Array.isArray(session.abandonedBy) && session.abandonedBy.includes(targetUsername);
     if (!wasAbandoned) {
-      return res.status(409).json({ error: `${targetUsername} was not in this session` });
+      throw Object.assign(new Error(`${targetUsername} was not in this session`), { status: 409 });
     }
 
     const baseBudget = Number(session?.budgetPerBidder || 0);
@@ -890,9 +742,10 @@ router.post("/rooms/:roomCode/readmit", requireUserAuth, async (req, res) => {
       sequence: nextSequence,
       abandonedBy: nextAbandoned,
     });
-    await sessionRef.set(normalized, { merge: true });
-    emitSessionUpdate(normalized);
-    return res.json({ session: sanitizeSessionForViewer(normalized, hostUsername) });
+    return normalized;
+    });
+    emitSessionUpdate(readmitted);
+    return res.json({ session: sanitizeSessionForViewer(readmitted, hostUsername) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to readmit player", 400);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -902,38 +755,31 @@ router.post("/rooms/:roomCode/readmit", requireUserAuth, async (req, res) => {
 router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
   try {
     const { db } = getFirebase();
-    const sessionRef = db.collection("sessions").doc(String(req.params.id));
-    const snap = await sessionRef.get();
-    if (!snap.exists) return res.status(404).json({ error: "Session not found" });
-
-    const session = normalizeSessionDocument(snap.data());
     const username = String(req.user?.username || "").trim();
     if (!username) return res.status(400).json({ error: "Invalid user" });
-
-    if (session.status === "complete" || session.status === "cancelled") {
-      return res.status(409).json({ error: "Session is already closed" });
-    }
-
+    const abandoned = await mutateSession(db, req.params.id, async (session, transaction) => {
     if (session.host === username) {
       const normalized = withParticipantNames({
         ...session,
         status: "cancelled",
         cancelledBy: username,
         cancelledAt: Date.now(),
-        participants: [],
-        sequence: [],
-        passedThisLot: [],
-        turnIdx: 0,
+        lotOpen: false,
       });
-      emitSessionClosed(normalized, "cancelled");
-      await cleanupLiveSession(db, normalized);
-      return res.json({ session: sanitizeSessionForViewer(normalized, username) });
+      const sourceId = session.transferWindow?.sourceResultId;
+      const sourceRef = sourceId ? db.collection("auctionResults").doc(sourceId) : null;
+      const source = sourceRef ? await transaction.get(sourceRef) : null;
+      if (session.roomCode) transaction.delete(db.collection("rooms").doc(session.roomCode.toUpperCase()));
+      if (source?.exists && source.data().transferWindow?.activeSessionId === session.id) {
+        transaction.set(sourceRef, { transferWindow: { ...source.data().transferWindow, activeSessionId: "", phase: "locked", closedAt: Date.now() } }, { merge: true });
+      }
+      return normalized;
     }
 
     const participants = Array.isArray(session.participants) ? session.participants : [];
     const hasUser = participants.some((p) => p.name === username);
     if (!hasUser) {
-      return res.status(404).json({ error: "You are not part of this session" });
+      throw Object.assign(new Error("You are not part of this session"), { status: 403 });
     }
 
     const nextParticipants = participants.filter((p) => p.name !== username);
@@ -955,9 +801,11 @@ router.post("/sessions/:id/abandon", requireUserAuth, async (req, res) => {
       abandonedBy: Array.from(new Set([...(session.abandonedBy || []), username])),
     });
 
-    await sessionRef.set(normalized, { merge: true });
-    emitSessionUpdate(normalized);
-    return res.json({ session: sanitizeSessionForViewer(normalized, username) });
+    return normalized;
+    });
+    if (abandoned.status === "cancelled") emitSessionClosed(abandoned, "cancelled");
+    else emitSessionUpdate(abandoned);
+    return res.json({ session: sanitizeSessionForViewer(abandoned, username) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to abandon session", 500);
     return res.status(normalized.status).json({ error: normalized.error });

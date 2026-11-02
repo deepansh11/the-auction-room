@@ -1,126 +1,26 @@
 import React from "react";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
-import { apiGetSession, apiUpdateSession } from "../lib/api.js";
-import { subscribeToSessionStream } from "../lib/realtime.js";
+import { submitSessionAction } from "../lib/realtime.js";
+import { useSessionRealtime } from "../lib/useSessionRealtime.js";
 import { PCOLORS } from "../game/constants.js";
 import { TeamBadge, getParticipantAccent } from "../theme/footballTheme.js";
 
 export function DrawScreen({ session, onComplete, onAbandon, user }) {
   const [liveSession, setLiveSession] = React.useState(session);
-  const syncNowRef = React.useRef(() => {});
   const isHost = !!user && liveSession.host === user.username;
+  const [pending, setPending] = React.useState(false);
+  const [error, setError] = React.useState("");
 
   React.useEffect(() => {
     setLiveSession(session);
   }, [session]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    let timerId = null;
-    let failCount = 0;
-    const BASE_POLL_MS = 15000;
-    const HIDDEN_POLL_MS = 60000;
-    const BACKOFF_MS = [5000, 10000, 20000];
-    let lastReconnectSyncAt = 0;
-
-    const applyLatest = (latest) => {
-      if (!latest || cancelled) return;
-      setLiveSession(latest);
-      if (latest.status === "active") {
-        onComplete();
-      }
-      if (latest.status === "cancelled") {
-        onAbandon();
-      }
-    };
-
-    const schedule = (ms) => {
-      if (cancelled) return;
-      const jitter = Math.floor(Math.random() * 161) - 80;
-      timerId = setTimeout(() => {
-        syncSession(false);
-      }, Math.max(350, ms + jitter));
-    };
-
-    const syncSession = async (force = false) => {
-      if (cancelled) return;
-      if (!force && typeof document !== "undefined" && document.hidden) {
-        schedule(HIDDEN_POLL_MS);
-        return;
-      }
-
-      try {
-        const latest = await apiGetSession(session.id, user?.token);
-        if (!latest || cancelled) return;
-        failCount = 0;
-        applyLatest(latest);
-        schedule(BASE_POLL_MS);
-      } catch (err) {
-        const msg = String(err?.message || "").toLowerCase();
-        if (msg.includes("404") || msg.includes("not found")) {
-          onAbandon();
-          return;
-        }
-        failCount = Math.min(failCount + 1, BACKOFF_MS.length);
-        schedule(BACKOFF_MS[failCount - 1] || 5000);
-      }
-    };
-
-    syncNowRef.current = () => {
-      failCount = 0;
-      if (timerId) clearTimeout(timerId);
-      syncSession(true);
-    };
-
-    const onFocus = () => syncNowRef.current?.();
-    const onVisibility = () => {
-      if (typeof document !== "undefined" && !document.hidden) {
-        syncNowRef.current?.();
-      }
-    };
-
-    if (typeof window !== "undefined") {
-      window.addEventListener("focus", onFocus);
-    }
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", onVisibility);
-    }
-
-    const unsubscribeStream = subscribeToSessionStream(session.id, {
-      onUpdate: (next) => {
-        failCount = 0;
-        applyLatest(next);
-      },
-      onClosed: (next, reason) => {
-        if (reason === "cancelled") {
-          onAbandon();
-          return;
-        }
-        applyLatest(next);
-      },
-      onReconnect: () => {
-        const now = Date.now();
-        if (now - lastReconnectSyncAt < 15000) return;
-        lastReconnectSyncAt = now;
-        syncNowRef.current?.();
-      },
-    }, user?.username);
-
-    syncSession(true);
-
-    return () => {
-      cancelled = true;
-      unsubscribeStream();
-      if (timerId) clearTimeout(timerId);
-      if (typeof window !== "undefined") {
-        window.removeEventListener("focus", onFocus);
-      }
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", onVisibility);
-      }
-    };
-  }, [session.id, onComplete, onAbandon, user?.username, user?.token]);
+  useSessionRealtime(session.id, user, {
+    onUpdate: latest => { setLiveSession(latest); if (latest.status === "active") onComplete(latest); },
+    onClosed: () => onAbandon(),
+    onError: error => setError(error.message),
+  });
 
   const participantNames = Array.isArray(liveSession.participantNames) && liveSession.participantNames.length > 0
     ? liveSession.participantNames
@@ -134,36 +34,19 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
     ? [...participantNames].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
     : participantNames;
 
-  const persistDrawState = async (patch) => {
-    if (!isHost) return;
-    await apiUpdateSession(liveSession.id, {
-      ...liveSession,
-      ...patch,
-      status: "draw",
-      updatedAt: Date.now(),
-    }, user?.token);
-    syncNowRef.current?.();
+  const runAction = async type => {
+    if (!isHost || pending) return;
+    setPending(true);
+    setError("");
+    try { await submitSessionAction(liveSession.id, { type }, user.token, Number(liveSession.revision || 0)); }
+    catch (error) { setError(error.message); }
+    finally { setPending(false); }
   };
-
-  const next = async () => {
-    if (!isHost) return;
-    sfx("reveal");
-    const nextCount = Math.min(shown.length + 1, totalCount);
-    await persistDrawState({ drawPhase: 1, revealedPickCount: nextCount });
-  };
+  const next = () => runAction("reveal-draw");
 
   const done = shown.length===totalCount;
 
-  const startBidding = async () => {
-    if (!isHost) return;
-    await apiUpdateSession(liveSession.id, {
-      ...liveSession,
-      status: "active",
-      updatedAt: Date.now(),
-    }, user?.token);
-    syncNowRef.current?.();
-    onComplete();
-  };
+  const startBidding = () => runAction("start");
 
   return React.createElement("div", {
     style:{ minHeight:"100vh", background:"transparent", display:"flex", alignItems:"center",
@@ -226,14 +109,15 @@ export function DrawScreen({ session, onComplete, onAbandon, user }) {
 
       !done
         ? isHost
-          ? React.createElement("button", { style:BTN.gold, onClick:next },
+          ? React.createElement("button", { style:BTN.gold, onClick:next, disabled:pending },
               shown.length===0 ? "REVEAL PICKS" : `REVEAL #${shown.length+1}`
             )
           : React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "⏳ Waiting for host reveal…")
         : isHost
-          ? React.createElement("button", { style:BTN.gold, onClick:startBidding }, "START BIDDING 🔥")
+          ? React.createElement("button", { style:BTN.gold, onClick:startBidding, disabled:pending }, "START BIDDING 🔥")
           : React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } }, "⏳ Waiting for host to start bidding…"),
 
+      error && React.createElement("div", { style:{ color:"#FF6B35", marginTop:10 } }, error),
       React.createElement("div", { style:{ marginTop:14 } },
         React.createElement("button", {
           onClick: onAbandon,

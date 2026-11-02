@@ -1,13 +1,22 @@
 import React from "react";
-import { BallonDorPanel } from "../components/BallonDorPanel.jsx";
+const BallonDorPanel = React.lazy(() => import("../components/BallonDorPanel.jsx").then(module => ({ default: module.BallonDorPanel })));
 import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { loadPlayersFromCsv } from "../data/players.js";
-import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
+import { PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData, getTierKey } from "../game/constants.js";
 import { buildRandomCupBracket, computeGroupTable, computeKnockoutMatchups } from "../game/groupsFixtures.js";
-import { apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateResultTransferWindow, apiUpdateSession } from "../lib/api.js";
+import { apiGetClubSelections, apiSaveClubSelection, apiGetFixtures, apiGetSession, apiSaveFixtureScore, apiSaveFixtures, apiUpdateResultTransferListing, apiUpdateResultTransferWindow } from "../lib/api.js";
+import { submitSessionAction } from "../lib/realtime.js";
+import { applySessionEvent } from "../lib/sessionEvents.js";
+import { CountdownText, useDeadlinePassed } from "../components/Countdown.jsx";
 import { downloadSquadImage } from "../utils/squadImage.js";
 import { BTN } from "../utils/styles.js";
 import { trackEvent } from "../lib/analytics.js";
+import { ResultMatchRow } from "../components/ResultMatchRow.jsx";
+import "../styles/results.css";
+import { ISL_CLUBS, islClubName } from "../../backend/shared/islClubs.js";
+import { fixtureLegCount } from "../../backend/shared/fixtureLegs.js";
+const EMPTY_OBJECT = Object.freeze({});
+const EMPTY_ARRAY = Object.freeze([]);
 
 function KnockoutBracket({
   groups,
@@ -769,13 +778,14 @@ function LeaguePlacementChip({ index, totalTeams, seasonNumber }) {
   }, "MID");
 }
 
-function StandingsTable({ rows, seasonNumber }) {
-  return React.createElement("div", { style: { overflowX: "auto" } },
+function StandingsTable({ rows, seasonNumber, expanded = false, teamLabels = {} }) {
+  return React.createElement("div", { className: `results-standings${expanded ? " results-standings--expanded" : ""}`, style: { overflowX: "auto" } },
     React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", minWidth: 920 } },
       React.createElement("thead", null,
         React.createElement("tr", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#718096" } },
           ["#", "TEAM", "PLD", "W", "D", "L", "GF", "GA", "GD", "PTS", "FORM"].map((heading) => React.createElement("th", {
             key: heading,
+            className: ["W", "D", "L", "GF", "GA", "FORM"].includes(heading) ? "standings-extra" : undefined,
             style: {
               textAlign: heading === "TEAM" ? "left" : "center",
               padding: "10px 8px",
@@ -800,15 +810,16 @@ function StandingsTable({ rows, seasonNumber }) {
           React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
             React.createElement(TeamBadge, { name: row.name, color: row.color, small: true }),
             React.createElement("div", { style: { minWidth: 0 } },
-              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#fff", letterSpacing: 1 } }, row.name),
+               React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 18, color: "#fff", letterSpacing: 1 } }, teamLabels[row.name] || row.name),
+               teamLabels[row.name] && React.createElement("small", { className: "results-muted" }, row.name),
               (row.penaltyPoints > 0 || row.penaltyGd > 0) && React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#ff8aa9", marginTop: 2 } },
                 `${row.penaltyPoints > 0 ? `-${row.penaltyPoints} pts` : ""}${row.penaltyPoints > 0 && row.penaltyGd > 0 ? " · " : ""}${row.penaltyGd > 0 ? `-${row.penaltyGd} gd` : ""}`
               ),
-              React.createElement(LeaguePlacementChip, { index, totalTeams: rows.length, seasonNumber })
+               React.createElement("span", { className: "standings-placement" }, React.createElement(LeaguePlacementChip, { index, totalTeams: rows.length, seasonNumber }))
             )
           )
         ),
-        ["played", "won", "drawn", "lost", "gf", "ga"].map((key) => React.createElement("td", { key, style: { textAlign: "center", padding: "12px 8px" } }, row[key])),
+         ["played", "won", "drawn", "lost", "gf", "ga"].map((key) => React.createElement("td", { key, className: key !== "played" ? "standings-extra" : undefined, style: { textAlign: "center", padding: "12px 8px" } }, row[key])),
         React.createElement("td", {
           style: {
             textAlign: "center",
@@ -827,7 +838,7 @@ function StandingsTable({ rows, seasonNumber }) {
             letterSpacing: 1,
           }
         }, row.points),
-        React.createElement("td", { style: { textAlign: "right", padding: "12px 8px" } }, React.createElement(FormChips, { form: row.form }))))
+         React.createElement("td", { className: "standings-extra", style: { textAlign: "right", padding: "12px 8px" } }, React.createElement(FormChips, { form: row.form }))))
       )
     )
   );
@@ -884,20 +895,6 @@ function fromDateAndTimeValue(dateValue, hourValue, minuteValue) {
 const DEADLINE_HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
 const DEADLINE_MINUTE_OPTIONS = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 
-function formatCountdown(ms) {
-  if (!Number.isFinite(ms)) return "";
-  if (ms <= 0) return "00:00:00:00";
-  const totalSeconds = Math.floor(ms / 1000);
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (days > 0) {
-    return `${String(days).padStart(2, "0")}:${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
 function restoreTransferredPlayer(player) {
   if (!player || typeof player !== "object") return player;
   const { soldAt, salePrice, ...restoredPlayer } = player;
@@ -922,7 +919,7 @@ function filterInventoryPlayers(rows, { search = "", owner = "ALL", pos = "ALL",
 export function ResultsScreen({
   participants,
   wishlists,
-  players = [],
+  players = EMPTY_ARRAY,
   tiers = TIERS,
   selectedName,
   auctionResultId,
@@ -930,13 +927,13 @@ export function ResultsScreen({
   host = "",
   onRefresh,
   groupsEnabled = false,
-  groups = {},
-  fixtures = {},
+  groups = EMPTY_OBJECT,
+  fixtures = EMPTY_OBJECT,
   knockoutFormat = "quarterFinal",
   onStartTransferWindow,
   fixtureLeg = "single",
-  seasonInfo = {},
-  transferWindow = {},
+  seasonInfo = EMPTY_OBJECT,
+  transferWindow = EMPTY_OBJECT,
   onBackToDiscover,
 }) {
   React.useLayoutEffect(() => {
@@ -952,19 +949,21 @@ export function ResultsScreen({
   }, []);
 
   const isHost = Boolean(host && user?.username && host === user.username);
-  const [view, setView] = React.useState("table");
+  const [view, setView] = React.useState("squads");
+  const [selectedSquad, setSelectedSquad] = React.useState(selectedName || participants[0]?.name || "");
+  const [expandedStandings, setExpandedStandings] = React.useState(false);
+  const [inventoryLimit, setInventoryLimit] = React.useState(25);
   const [analyserOpen, setAnalyserOpen] = React.useState(false);
   const [selectedUploadFixture, setSelectedUploadFixture] = React.useState(null);
   const [historySearch, setHistorySearch] = React.useState("");
   const [historyOwnerFilter, setHistoryOwnerFilter] = React.useState("ALL");
   const [historyPosFilter, setHistoryPosFilter] = React.useState("ALL");
   const [historyTierFilter, setHistoryTierFilter] = React.useState("ALL");
-  const [historySectionFilter, setHistorySectionFilter] = React.useState("ALL");
-  const [matchTeamFilter, setMatchTeamFilter] = React.useState("ALL");
+  const [historySectionFilter, setHistorySectionFilter] = React.useState("purchased");
+  const [matchTeamFilter, setMatchTeamFilter] = React.useState(isHost ? "ALL" : selectedName || "ALL");
   const [matchLegFilter, setMatchLegFilter] = React.useState("ALL");
   const [fixturesState, setFixturesState] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).groupFixtures);
   const [catalogPlayers, setCatalogPlayers] = React.useState([]);
-  const [savingFixtureId, setSavingFixtureId] = React.useState("");
   const [knockoutScores, setKnockoutScores] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).knockoutScores);
   const [cupFixture, setCupFixture] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).cupFixture);
   const [penaltyAdjustments, setPenaltyAdjustments] = React.useState(() => splitFixtureState(fixtures, knockoutFormat).penaltyAdjustments);
@@ -978,7 +977,6 @@ export function ResultsScreen({
   const [deadlineHourDraft, setDeadlineHourDraft] = React.useState("");
   const [deadlineMinuteDraft, setDeadlineMinuteDraft] = React.useState("");
   const [deadlineSaving, setDeadlineSaving] = React.useState(false);
-  const [clockNow, setClockNow] = React.useState(Date.now());
   const [resultTransferState, setResultTransferState] = React.useState({
     participants,
     carriedBudgets: {},
@@ -989,7 +987,28 @@ export function ResultsScreen({
   const [transferSyncLoading, setTransferSyncLoading] = React.useState(false);
   const [transferActionPlayerId, setTransferActionPlayerId] = React.useState("");
   const [transferActionMessage, setTransferActionMessage] = React.useState("");
-  const saveFixturesTimerRef = React.useRef(null);
+  const [clubSelections, setClubSelections] = React.useState({});
+  const [clubSaving, setClubSaving] = React.useState(false);
+  const [clubError, setClubError] = React.useState("");
+  const clubSavingRef = React.useRef(false);
+  const clubRequestRef = React.useRef(0);
+  const loadClubs = React.useCallback(async () => {
+    if (!auctionResultId || !user?.token || clubSavingRef.current) return;
+    const request = ++clubRequestRef.current;
+    try { const selections = await apiGetClubSelections(auctionResultId, user.token); if (request === clubRequestRef.current) { setClubSelections(selections); setClubError(""); } }
+    catch (error) { if (request === clubRequestRef.current) setClubError(error.message || "Could not load ISL club choices."); }
+  }, [auctionResultId, user?.token]);
+  React.useEffect(() => { loadClubs(); }, [loadClubs, view]);
+  const clubLabels = React.useMemo(() => Object.fromEntries(Object.entries(clubSelections).map(([name, id]) => [name, islClubName(id)])), [clubSelections]);
+  const selectClub = async clubId => {
+    if (clubSavingRef.current) return;
+    clubSavingRef.current = true;
+    clubRequestRef.current++;
+    setClubSaving(true); setClubError("");
+    try { setClubSelections(await apiSaveClubSelection(auctionResultId, clubId, user.token)); }
+    catch (error) { setClubError(error.message || "Could not save your club choice."); }
+    finally { clubSavingRef.current = false; setClubSaving(false); }
+  };
   const nameMap = React.useMemo(() => buildNameMap(participants, groups), [participants, groups]);
 
   React.useEffect(() => {
@@ -1001,6 +1020,7 @@ export function ResultsScreen({
   }, [fixtures, knockoutFormat]);
 
   React.useEffect(() => {
+    if (view !== "history" && view !== "transfers") return;
     let cancelled = false;
     loadPlayersFromCsv()
       .then((nextPlayers) => {
@@ -1016,7 +1036,9 @@ export function ResultsScreen({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [view]);
+
+  React.useEffect(() => { setInventoryLimit(25); }, [view, historySearch, historyOwnerFilter, historyPosFilter, historyTierFilter, historySectionFilter]);
 
   React.useEffect(() => {
     setResultTransferState({
@@ -1080,36 +1102,32 @@ export function ResultsScreen({
       setMatchTeamFilter("ALL");
       return;
     }
-    if (matchTeamFilter !== "ALL") return;
-    if (isHost) return;
-    if (selectedName && matchTeamOptions.includes(selectedName)) {
-      setMatchTeamFilter(selectedName);
-    }
-  }, [isHost, matchTeamFilter, matchTeamOptions, selectedName]);
+  }, [matchTeamFilter, matchTeamOptions]);
 
   const groupSections = React.useMemo(() => {
-    const splitForLegs = fixtureLeg === "double";
+    const legCount = fixtureLegCount(fixtureLeg);
     return Object.entries(resolvedGroups).flatMap(([label, teams]) => {
       const groupFixtures = [...(resolvedFixturesByGroup[label] || [])].sort((a, b) => {
         const roundDiff = (Number(a.round) || 0) - (Number(b.round) || 0);
         if (roundDiff !== 0) return roundDiff;
         return String(a.id || "").localeCompare(String(b.id || ""));
       });
-      const firstLegLimit = getBaseRoundCount(teams.length);
-      const firstLeg = groupFixtures.filter((fixture) => Number(fixture.round || 0) <= firstLegLimit);
-      const secondLeg = groupFixtures.filter((fixture) => Number(fixture.round || 0) > firstLegLimit);
-      if (!splitForLegs) {
+      const roundsPerLeg = getBaseRoundCount(teams.length);
+      if (legCount === 1) {
         return [{ id: `${label}-all`, groupLabel: label, leg: "ALL", title: `Group ${label}`, subtitle: `${teams.length} teams`, fixtures: groupFixtures }];
       }
-      const sections = [{ id: `${label}-first`, groupLabel: label, leg: "FIXTURE_1", title: `Group ${label} · Fixture 1`, subtitle: "First set of combinations", fixtures: firstLeg }];
-      if (secondLeg.length > 0) {
-        sections.push({ id: `${label}-second`, groupLabel: label, leg: "FIXTURE_2", title: `Group ${label} · Fixture 2`, subtitle: "Second set of combinations", fixtures: secondLeg });
-      }
+      const sections = Array.from({ length: legCount }, (_, index) => {
+        const leg = index + 1;
+        return { id: `${label}-leg-${leg}`, groupLabel: label, leg: `FIXTURE_${leg}`, title: `Group ${label} · ${["First", "Second", "Third"][index]} leg`, subtitle: `${teams.length} teams`,
+          fixtures: groupFixtures.filter(fixture => Number(fixture.leg || Math.floor((Number(fixture.round) - 1) / roundsPerLeg) + 1) === leg) };
+      });
+      const extras = groupFixtures.filter(fixture => !fixture.leg && Number(fixture.round) > roundsPerLeg * legCount);
+      if (extras.length) sections.push({ id: `${label}-extra`, groupLabel: label, leg: "EXTRA", title: `Group ${label} · Additional fixtures`, fixtures: extras });
       return sections;
     });
   }, [resolvedGroups, resolvedFixturesByGroup, fixtureLeg]);
   const hasFixtureSplit = React.useMemo(
-    () => groupSections.some((section) => section.leg === "FIXTURE_1" || section.leg === "FIXTURE_2"),
+    () => groupSections.some((section) => section.leg !== "ALL"),
     [groupSections]
   );
   const filteredGroupSections = React.useMemo(() => {
@@ -1158,13 +1176,8 @@ export function ResultsScreen({
   const transferWindowAlreadyOpened = Boolean(transferSessionId || effectiveTransferWindow?.openedAt || transferWindow?.openedAt);
   const listingDeadlineAt = Number(effectiveTransferWindow?.listingDeadlineAt || 0);
   const listingDeadlineValid = Number.isFinite(listingDeadlineAt) && listingDeadlineAt > 0;
-  const listingDeadlineRemaining = listingDeadlineValid ? listingDeadlineAt - clockNow : null;
-  const listingDeadlinePassed = listingDeadlineValid && listingDeadlineRemaining <= 0;
-  const listingDeadlineText = listingDeadlineValid
-    ? listingDeadlineRemaining > 0
-      ? `Listing deadline in ${formatCountdown(listingDeadlineRemaining)}`
-      : "Listing deadline reached"
-    : "No listing deadline set";
+  const listingDeadlinePassed = useDeadlinePassed(listingDeadlineAt);
+  const listingDeadlineText = React.createElement(CountdownText, { deadlineAt: listingDeadlineAt });
   const transferListingEditable = Boolean(
     user?.token
     && !listingDeadlinePassed
@@ -1214,11 +1227,6 @@ export function ResultsScreen({
   React.useEffect(() => {
     loadTransferSession();
   }, [loadTransferSession]);
-
-  React.useEffect(() => {
-    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   React.useEffect(() => {
     setDeadlineDateDraft(toDateInputValue(effectiveTransferWindow.listingDeadlineAt));
@@ -1323,61 +1331,12 @@ export function ResultsScreen({
     () => inventoryParticipants.find((participant) => participant.name === selectedName) || null,
     [inventoryParticipants, selectedName]
   );
-  const handleFixtureGoalChange = (groupLabel, fixtureId, side, rawValue) => {
-    const value = rawValue === "" ? null : Math.max(0, parseInt(rawValue, 10) || 0);
-    setFixturesState((prev) => {
-      const next = {
-        ...prev,
-        [groupLabel]: (prev[groupLabel] || []).map((fixture) => {
-          if (fixture.id !== fixtureId) return fixture;
-          const updatedFixture = {
-            ...fixture,
-            [side === "home" ? "homeGoals" : "awayGoals"]: value,
-          };
-          if (isPlayedFixture(updatedFixture)) {
-            updatedFixture.scoreUpdatedAt = Date.now();
-          } else {
-            updatedFixture.scoreUpdatedAt = null;
-          }
-          return updatedFixture;
-        }),
-      };
-
-      if (auctionResultId) {
-        setSavingFixtureId(fixtureId);
-        if (saveFixturesTimerRef.current) clearTimeout(saveFixturesTimerRef.current);
-        saveFixturesTimerRef.current = setTimeout(async () => {
-          try {
-            const currentFixture = (next[groupLabel] || []).find((fixture) => fixture.id === fixtureId);
-            if (!currentFixture) return;
-            if (isHost) {
-              await apiSaveFixtures(auctionResultId, buildFixturePayload({
-                groupFixtures: next,
-                cupFixture,
-                penaltyAdjustments,
-                knockoutScores,
-              }), user?.token);
-            } else {
-              await apiSaveFixtureScore(
-                auctionResultId,
-                groupLabel,
-                fixtureId,
-                currentFixture.homeGoals,
-                currentFixture.awayGoals,
-                user?.token
-              );
-            }
-            trackEvent("fixture_goal_entered", { group: groupLabel });
-          } catch (_err) {
-            // The next edit triggers another save.
-          } finally {
-            setSavingFixtureId("");
-          }
-        }, 500);
-      }
-
-      return next;
-    });
+  const handleSaveFixtureScore = async (groupLabel, fixtureId, homeGoals, awayGoals) => {
+    if (!auctionResultId || !user?.token) throw new Error("Sign in to save a result.");
+    await apiSaveFixtureScore(auctionResultId, groupLabel, fixtureId, homeGoals, awayGoals, user.token);
+    setFixturesState(previous => ({ ...previous, [groupLabel]: (previous[groupLabel] || []).map(fixture => fixture.id === fixtureId
+      ? { ...fixture, homeGoals, awayGoals, scoreUpdatedAt: homeGoals !== null && awayGoals !== null ? Date.now() : null } : fixture) }));
+    trackEvent("fixture_goal_entered", { group: groupLabel });
   };
 
   const suggestedCupFixture = React.useMemo(
@@ -1586,73 +1545,10 @@ export function ResultsScreen({
     setTransferActionPlayerId(String(player.id));
     setTransferActionMessage("");
     try {
-      const nextParticipants = activeParticipants.map((participant) => {
-        if (participant.name !== player.owner) return participant;
-        const soldPlayers = Array.isArray(participant.soldPlayers) ? participant.soldPlayers : [];
-        const squad = Array.isArray(participant.squad) ? participant.squad : [];
-
-        if (currentlyListed) {
-          const restoredPlayer = soldPlayers.find((entry) => Number(entry?.id) === Number(player.id));
-          const nextSoldPlayers = soldPlayers.filter((entry) => Number(entry?.id) !== Number(player.id));
-          return {
-            ...participant,
-            budget: Math.max(0, Number(participant.budget || 0) - listingPrice),
-            squad: restoredPlayer
-              ? [...squad, restoreTransferredPlayer(restoredPlayer)]
-              : squad,
-            soldPlayers: nextSoldPlayers,
-          };
-        }
-
-        return {
-          ...participant,
-          budget: Number(participant.budget || 0) + listingPrice,
-          squad: squad.filter((entry) => Number(entry?.id) !== Number(player.id)),
-          soldPlayers: [
-            ...soldPlayers,
-            {
-              ...player,
-              soldAt: Date.now(),
-              salePrice: listingPrice,
-              soldInTransferWindow: true,
-            },
-          ],
-        };
-      });
-
       if (transferSessionState?.id) {
-        const nextCompletedBy = Array.from(new Set(nextParticipants
-          .filter((participant) => {
-            const count = (participant.soldPlayers || []).length;
-            return count >= requiredSalesMin && count <= requiredSalesMax;
-          })
-          .map((participant) => participant.name)));
-        const nextSoldPlayerIds = nextParticipants
-          .flatMap((participant) => Array.isArray(participant?.soldPlayers) ? participant.soldPlayers : [])
-          .map((entry) => Number(entry?.id))
-          .filter(Number.isFinite);
-        const nextCarriedBudgets = {
-          ...(transferSessionState.carriedBudgets || {}),
-          [player.owner]: Number.isFinite(Number((transferSessionState.carriedBudgets || {})[player.owner]))
-            ? Number((transferSessionState.carriedBudgets || {})[player.owner])
-            : Number(ownerParticipant.budget || 0),
-        };
-        const nextSession = {
-          ...transferSessionState,
-          participants: nextParticipants,
-          soldPlayerIds: nextSoldPlayerIds,
-          expectedBudgets: Object.fromEntries(nextParticipants.map((participant) => [
-            participant.name,
-            Number(participant?.budget || 0),
-          ])),
-          carriedBudgets: nextCarriedBudgets,
-          transferWindow: {
-            ...effectiveTransferWindow,
-            completedBy: nextCompletedBy,
-          },
-        };
-        await apiUpdateSession(transferSessionState.id, nextSession, user.token);
-        setTransferSessionState(nextSession);
+        const reply = await submitSessionAction(transferSessionState.id, { type: "transfer-toggle", playerId: Number(player.id), listed: !currentlyListed }, user.token, Number(transferSessionState.revision || 0));
+        const result = applySessionEvent(transferSessionState, reply.event);
+        if (result.gap) await loadTransferSession(); else setTransferSessionState(result.session);
       } else {
         const nextResult = await apiUpdateResultTransferListing(auctionResultId, player.id, !currentlyListed, user.token);
         setResultTransferState({
@@ -1664,6 +1560,7 @@ export function ResultsScreen({
       }
       setTransferActionMessage(currentlyListed ? "Player removed from transfer listings." : "Player added to transfer listings.");
     } catch (err) {
+      if (err.code === "STALE_REVISION") await loadTransferSession();
       setTransferActionMessage(err.message || "Could not update the transfer listings.");
     } finally {
       setTransferActionPlayerId("");
@@ -1675,22 +1572,12 @@ export function ResultsScreen({
     const ownerColor = player.ownerIdx >= 0 ? PCOLORS[player.ownerIdx % PCOLORS.length] : "#7f8ea6";
     const isOwnedByViewer = player.owner === selectedName;
     const canToggle = showAction && isOwnedByViewer && transferListingEditable;
-    const actionLabel = player.isTransferListed ? "REMOVE" : "PUT UP";
+    const actionLabel = player.isTransferListed ? "Unlist" : "List for transfer";
 
     return React.createElement("div", {
-      key: `${player.owner || "pool"}-${player.id}-${index}`,
-      style: {
-        display: "grid",
-        gridTemplateColumns: showAction ? "34px 52px 60px minmax(0,1fr) 150px 64px auto" : "34px 52px 60px minmax(0,1fr) 150px 64px",
-        alignItems: "center",
-        gap: 12,
-        background: "#0a0f17",
-        borderRadius: 14,
-        padding: "10px 14px",
-        border: `1px solid ${player.isTransferListed ? "#FF6B3544" : `${td.border}33`}`,
-      }
+      key: `${player.owner || "pool"}-${player.id}`,
+      className: "results-player-row",
     },
-    React.createElement("span", { style: { fontFamily: "'Bebas Neue'", color: "#334155", fontSize: 14 } }, `#${index + 1}`),
     React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: td.color } }, player.rating),
     React.createElement("span", {
       style: {
@@ -1706,56 +1593,16 @@ export function ResultsScreen({
     }, player.pos),
     React.createElement("div", { style: { minWidth: 0 } },
       React.createElement("div", { style: { fontFamily: "'Exo 2'", fontSize: 14, fontWeight: 600, color: "#e0e7f1", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, player.name),
-      showTransferPrice && React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6", marginTop: 2 } }, `${player.transferPrice}M ${player.isTransferListed ? "transfer value" : "auction value"}`)
+      showTransferPrice && React.createElement("div", { className: "results-muted results-player-price" }, `${player.transferPrice}M${player.isTransferListed ? " · Listed" : ""}`)
     ),
     showOwner
-      ? React.createElement("span", { style: { fontFamily: "'Exo 2'", fontSize: 12, color: ownerColor, fontWeight: 700 } }, player.owner || "UNPURCHASED")
-      : React.createElement("span", { style: { fontFamily: "'Exo 2'", fontSize: 12, color: "#7f8ea6", fontWeight: 700 } }, "UNPURCHASED"),
-    React.createElement("div", { style: { display: "flex", justifyContent: "flex-end" } },
-      React.createElement("span", {
-        style: {
-          fontFamily: "'Rajdhani'",
-          fontSize: 11,
-          color: player.isTransferListed ? "#FFB84D" : td.color,
-          background: player.isTransferListed ? "#FFB84D12" : td.bg,
-          border: `1px solid ${player.isTransferListed ? "#FFB84D33" : "transparent"}`,
-          borderRadius: 999,
-          textAlign: "center",
-          padding: "4px 10px",
-          minWidth: 54,
-        }
-      }, player.isTransferListed ? "LISTED" : getTierKey(player.rating, tiers))
-    ),
-    showAction && (isOwnedByViewer
-      ? React.createElement("button", {
+      ? React.createElement("span", { className: "results-player-owner", style: { color: ownerColor } }, player.owner || "Available")
+      : React.createElement("span", { className: "results-player-owner results-muted" }, "Available"),
+    canToggle && React.createElement("button", {
+          type: "button", className: "results-player-action", "aria-label": `${actionLabel}: ${player.name}`,
           onClick: () => handleToggleTransferListing(player),
-          disabled: !canToggle || transferActionPlayerId === String(player.id),
-          style: {
-            background: player.isTransferListed ? "#2a1410" : "#0d1119",
-            color: player.isTransferListed ? "#FFB84D" : "#FF6B35",
-            border: `1px solid ${player.isTransferListed ? "#FFB84D44" : "#FF6B3544"}`,
-            borderRadius: 999,
-            padding: "7px 12px",
-            cursor: canToggle ? "pointer" : "default",
-            fontFamily: "'Bebas Neue'",
-            fontSize: 11,
-            letterSpacing: 1,
-            opacity: canToggle ? 1 : 0.45,
-          }
+          disabled: Boolean(transferActionPlayerId),
         }, transferActionPlayerId === String(player.id) ? "UPDATING…" : actionLabel)
-      : React.createElement("span", {
-          style: {
-            fontFamily: "'Rajdhani'",
-            fontSize: 10,
-            fontWeight: 700,
-            color: "#7f8ea6",
-            background: "#0d1119",
-            border: "1px solid #1f2937",
-            borderRadius: 999,
-            padding: "6px 10px",
-            letterSpacing: 1,
-          }
-        }, "OWNER ONLY"))
     );
   };
 
@@ -1766,7 +1613,7 @@ export function ResultsScreen({
     boxShadow: "0 20px 60px #00000033",
   };
 
-  return React.createElement("div", { style: { minHeight: "100vh", background: "radial-gradient(circle at top, #162132 0%, #070a12 45%, #04060a 100%)", color: "#fff" } },
+  return React.createElement("div", { className: "results-page" },
     React.createElement(SquadAnalyser, {
       participants,
       wishlists,
@@ -1776,71 +1623,32 @@ export function ResultsScreen({
       onClose: () => setAnalyserOpen(false),
       hidden: !analyserOpen,
     }),
-    React.createElement("div", { style: { maxWidth: 1220, margin: "0 auto", padding: "20px 18px 40px" } },
-      React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" } },
-        onBackToDiscover && React.createElement("button", {
-          onClick: onBackToDiscover,
-          style: {
-            background: "rgba(8,18,13,.78)",
-            color: "#e8f7ef",
-            border: "1px solid rgba(143,231,192,.16)",
-            borderRadius: 999,
-            padding: "10px 18px",
-            cursor: "pointer",
-            fontFamily: "'Bebas Neue'",
-            fontSize: 14,
-            letterSpacing: 1,
-          }
-        }, "← HOME"),
-        React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba" } }, latestFixtureTimestamp ? formatRelativeTime(latestFixtureTimestamp) : "League data ready")
-      ),
-      React.createElement("div", { style: { ...surfaceCard, padding: "24px 24px 20px", marginBottom: 18, overflow: "hidden", position: "relative" } },
-        React.createElement("div", { style: { position: "absolute", inset: 0, background: "linear-gradient(110deg,#4FC3F71a 0%, transparent 35%, #FFD70010 70%, transparent 100%)", pointerEvents: "none" } }),
-        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 18, alignItems: "flex-start", flexWrap: "wrap", position: "relative" } },
-          React.createElement("div", null,
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba", letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 } }, `Season ${seasonNumber} · ${leagueName}`),
-            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 54, color: "#fff", letterSpacing: 4, lineHeight: 0.95 } }, "League Centre"),
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 15, color: "#9aa5b5", marginTop: 10, maxWidth: 620, lineHeight: 1.5 } },
-              groupsEnabled
-                ? `Rankings are ordered by points first and goal difference second. Fixtures sync directly into the table, and ${seasonNumber >= 2 ? "the schedule is split before and after the transfer window." : "Season 1 stays branded as Elite League."}`
-                : "The standings table stays available even without a configured league schedule. Squads and Ballon dOr tracking remain available as well."
-            )
-          ),
-          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, minWidth: 320, flex: 1 } },
-            [
-              { label: "Teams", value: participants.length },
-              { label: "Played", value: `${playedMatches}/${totalMatches}` },
-              { label: "Last update", value: latestFixtureTimestamp ? formatRelativeTime(latestFixtureTimestamp).replace("Updated ", "") : "No scores" },
-            ].map((item) => React.createElement("div", {
-              key: item.label,
-              style: { background: "#0c1320cc", border: "1px solid #263247", borderRadius: 16, padding: "14px 16px" }
-            },
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#7f8ea6", textTransform: "uppercase", letterSpacing: 1 } }, item.label),
-            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 28, color: "#fff", letterSpacing: 2, marginTop: 6 } }, item.value)))
-          )
+    React.createElement("main", { className: "results-shell" },
+      React.createElement("header", { className: "results-header" },
+        React.createElement("div", null,
+          React.createElement("h1", null, leagueName),
+          React.createElement("span", { className: "results-muted" }, `Season ${seasonNumber} · ${participants.length} teams${groupsEnabled ? ` · ${playedMatches}/${totalMatches} matches played` : " · Auction results"}`)
+        ),
+        React.createElement("div", { className: "results-actions" },
+          onBackToDiscover && React.createElement("button", { type: "button", onClick: onBackToDiscover }, "← Home"),
+          groupsEnabled && (view === "table" || view === "matches") && React.createElement("button", { type: "button", onClick: () => { loadLatestFixtures(); loadClubs(); }, disabled: loadingLatest }, loadingLatest ? "Refreshing…" : "Refresh scores")
         )
       ),
-      React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap", justifyContent: "space-between", alignItems: "center" } },
-        React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
-          ["table", ...(groupsEnabled ? ["matches"] : []), "squads", "history", "awards"].map((nextView) => React.createElement("button", {
-            key: nextView,
-            onClick: () => setView(nextView),
-            style: {
-              background: view === nextView ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "#0d1119",
-              color: view === nextView ? "#06110c" : "#a7b1c2",
-              border: `1px solid ${view === nextView ? "rgba(79,195,247,.42)" : "#1f2937"}`,
-              borderRadius: 999,
-              padding: "9px 18px",
-              cursor: "pointer",
-              fontFamily: "'Bebas Neue'",
-              fontSize: 14,
-              letterSpacing: 1,
-              boxShadow: view === nextView ? "0 8px 24px rgba(79,195,247,.24)" : "none",
+      React.createElement("nav", { className: "results-nav", "aria-label": "Auction results" },
+        [["squads", "Squads"], ...(groupsEnabled ? [["table", "Standings"], ["matches", "Matches"]] : []), ["transfers", "Transfers"], ["awards", "Awards"]].map(([key, label]) =>
+          React.createElement("button", { type: "button", key, "aria-pressed": view === key || (key === "squads" && view === "history"), onClick: () => {
+            if (key === "transfers") {
+              setHistorySectionFilter("purchased");
+              setHistoryOwnerFilter(selectedName && inventoryParticipants.some(p => p.name === selectedName) ? selectedName : "ALL");
             }
-          }, nextView === "table" ? "TABLE" : nextView === "matches" ? "MATCHES" : nextView === "squads" ? "SQUADS" : nextView === "history" ? "ALL PLAYERS" : "BALLON D'OR")),
-        ),
-        React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
-          groupsEnabled && isHost && suggestedCupFixture && !cupFixture && React.createElement("button", {
+            setView(key);
+          } }, label))
+      ),
+      clubError && React.createElement("p", { role: "alert", className: "results-error" }, clubError),
+      (view === "table" || view === "matches" || view === "transfers") && isHost && React.createElement("details", { className: "results-disclosure" },
+        React.createElement("summary", null, view === "transfers" ? "Host transfer controls" : "Host cup controls"),
+        React.createElement("div", { className: "results-actions" },
+          view !== "transfers" && groupsEnabled && isHost && suggestedCupFixture && !cupFixture && React.createElement("button", {
             onClick: handleStartCupFixture,
             disabled: startingCupFixture,
             style: {
@@ -1856,7 +1664,7 @@ export function ResultsScreen({
               opacity: startingCupFixture ? 0.6 : 1,
             }
           }, startingCupFixture ? "STARTING CUP…" : `START CUP · ${getCupFormatLabel(suggestedCupFixture.format).toUpperCase()}`),
-          groupsEnabled && isHost && cupFixture && React.createElement("button", {
+          view !== "transfers" && groupsEnabled && isHost && cupFixture && React.createElement("button", {
             onClick: handleUndoCupFixture,
             disabled: startingCupFixture,
             style: {
@@ -1872,7 +1680,7 @@ export function ResultsScreen({
               opacity: startingCupFixture ? 0.6 : 1,
             }
           }, startingCupFixture ? "REMOVING CUP…" : "UNDO CUP FIXTURE"),
-          groupsEnabled && isHost && onStartTransferWindow && React.createElement("button", {
+          view === "transfers" && groupsEnabled && isHost && onStartTransferWindow && React.createElement("button", {
             onClick: handleStartTransfer,
             disabled: startingTransferWindow || !firstRoundComplete || (listingDeadlineValid && !listingDeadlinePassed),
             style: {
@@ -1888,20 +1696,6 @@ export function ResultsScreen({
               opacity: startingTransferWindow || !firstRoundComplete || (listingDeadlineValid && !listingDeadlinePassed) ? 0.6 : 1,
             }
           }, startingTransferWindow ? "OPENING TRANSFER…" : (listingDeadlineValid && !listingDeadlinePassed) ? "WAIT FOR DEADLINE" : transferWindowAlreadyOpened ? "REOPEN TRANSFER WINDOW" : firstRoundComplete ? "OPEN MID-SEASON TRANSFER" : "PLAY ALL FIRST-ROUND MATCHES"),
-          React.createElement("button", {
-            onClick: () => setAnalyserOpen(true),
-            style: {
-              background: "#8fe7c018",
-              color: "#8fe7c0",
-              border: "1px solid rgba(143,231,192,.28)",
-              borderRadius: 999,
-              padding: "9px 18px",
-              cursor: "pointer",
-              fontFamily: "'Bebas Neue'",
-              fontSize: 14,
-              letterSpacing: 1,
-            }
-          }, "ANALYSER")
         )
       ),
       view === "table" && React.createElement("div", { style: { display: "grid", gap: 20 } },
@@ -1913,9 +1707,12 @@ export function ResultsScreen({
             ),
             React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8ea0ba" } }, latestFixtureTimestamp ? formatRelativeTime(latestFixtureTimestamp) : "No scores entered yet")
           ),
-          React.createElement(StandingsTable, { rows: standings, seasonNumber })
+           React.createElement("label", { className: "results-muted", style: { display: "block", marginBottom: 12 } },
+             React.createElement("input", { type: "checkbox", checked: expandedStandings, onChange: event => setExpandedStandings(event.target.checked) }), " Detailed stats"),
+           React.createElement(StandingsTable, { rows: standings, seasonNumber, expanded: expandedStandings, teamLabels: clubLabels })
         ),
-        (isHost || hasPenaltyAdjustments) && React.createElement("div", { style: { ...surfaceCard, padding: 20 } },
+         (isHost || hasPenaltyAdjustments) && React.createElement("details", { className: "results-disclosure" },
+           React.createElement("summary", null, hasPenaltyAdjustments ? "Point deductions · adjustments applied" : "Point deductions"),
           React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 12, flexWrap: "wrap" } },
             React.createElement("div", null,
               React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#ff8aa9", letterSpacing: 2 } }, "PENALTY ADJUSTMENTS"),
@@ -1941,7 +1738,7 @@ export function ResultsScreen({
                 }
               }, "CLEAR"),
               React.createElement("button", {
-                onClick: handleSavePenalties,
+                 onClick: () => handleSavePenalties(),
                 disabled: savingPenalties,
                 style: {
                   background: "#ff8aa914",
@@ -1962,7 +1759,7 @@ export function ResultsScreen({
             penaltyRows
               .filter((row) => isHost || row.points > 0 || row.gd > 0)
               .map((row) => React.createElement("div", {
-                key: row.name,
+                 key: row.name, className: "results-penalty-row",
                 style: {
                   display: "grid",
                   gridTemplateColumns: isHost ? "minmax(220px,1fr) repeat(2, minmax(120px, 140px))" : "minmax(180px,1fr) 1fr",
@@ -2018,7 +1815,9 @@ export function ResultsScreen({
               ))
           )
         ),
-        cupFixture && Object.keys(groups).length >= 1 && React.createElement(KnockoutBracket, {
+         cupFixture && Object.keys(groups).length >= 1 && React.createElement("details", { className: "results-disclosure" },
+         React.createElement("summary", null, `Cup bracket · ${getCupFormatLabel(cupFixture.format)}`),
+         React.createElement(KnockoutBracket, {
           groups,
           fixturesState,
           knockoutScores,
@@ -2054,74 +1853,17 @@ export function ResultsScreen({
           } : null,
           onRefresh: !isHost ? loadLatestFixtures : null,
           refreshing: loadingLatest,
-        })
+         }))
       ),
       view === "matches" && groupsEnabled && React.createElement(
         "div",
         { style: { display: "grid", gap: 18 } },
-        React.createElement("div", {
-          style: {
-            ...surfaceCard,
-            padding: 18,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 14,
-            flexWrap: "wrap",
-          }
-        },
-          React.createElement("div", null,
-            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 2 } }, "MATCH SELECTOR"),
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 4 } }, isHost
-              ? "Host can edit scores and upload player stats for every fixture."
-              : "Pick a team to jump straight to its fixtures. You can edit/upload only for matches involving your team.")
-          ),
-          React.createElement("label", { style: { display: "grid", gap: 6, minWidth: 240 } },
-            React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, "Show matches for"),
-            React.createElement("select", {
-              value: matchTeamFilter,
-              onChange: (event) => setMatchTeamFilter(event.target.value),
-              style: {
-                background: "#09111b",
-                color: "#fff",
-                border: "1px solid #263247",
-                borderRadius: 10,
-                padding: "10px 12px",
-                fontFamily: "'Rajdhani'",
-                fontSize: 13,
-              }
-            },
-              React.createElement("option", { value: "ALL" }, "All teams"),
-              matchTeamOptions.map((teamName) => React.createElement("option", { key: teamName, value: teamName }, teamName))
-            )
-          )
-        ),
-        hasFixtureSplit && React.createElement("div", {
-          style: {
-            ...surfaceCard,
-            padding: 12,
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            alignItems: "center",
-          }
-        },
-          React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginRight: 6 } }, "Fixture view"),
-          ["ALL", "FIXTURE_1", "FIXTURE_2"].map((value) => React.createElement("button", {
-            key: value,
-            onClick: () => setMatchLegFilter(value),
-            style: {
-              background: matchLegFilter === value ? "linear-gradient(135deg,#4FC3F7,#8fe7c0)" : "#0d1119",
-              color: matchLegFilter === value ? "#06110c" : "#a7b1c2",
-              border: `1px solid ${matchLegFilter === value ? "rgba(79,195,247,.42)" : "#1f2937"}`,
-              borderRadius: 999,
-              padding: "8px 14px",
-              cursor: "pointer",
-              fontFamily: "'Bebas Neue'",
-              fontSize: 12,
-              letterSpacing: 1,
-            }
-          }, value === "ALL" ? "ALL FIXTURES" : value === "FIXTURE_1" ? "FIXTURE 1" : "FIXTURE 2"))
+        React.createElement("div", { className: "results-filters" },
+          React.createElement("label", null, "Show matches for", React.createElement("select", { "aria-label": "Show matches for", value: matchTeamFilter, onChange: event => setMatchTeamFilter(event.target.value) },
+            React.createElement("option", { value: "ALL" }, "All teams"),
+            matchTeamOptions.map(name => React.createElement("option", { key: name, value: name }, clubLabels[name] ? `${clubLabels[name]} · ${name}` : name)))),
+          hasFixtureSplit && React.createElement("label", null, "Fixture leg", React.createElement("select", { "aria-label": "Fixture leg", value: matchLegFilter, onChange: event => setMatchLegFilter(event.target.value) },
+            [["ALL", "All fixtures"], ...Array.from({ length: fixtureLegCount(fixtureLeg) }, (_, index) => [`FIXTURE_${index + 1}`, `${["First", "Second", "Third"][index]} leg`]), ...(groupSections.some(section => section.leg === "EXTRA") ? [["EXTRA", "Additional fixtures"]] : [])].map(([value, label]) => React.createElement("option", { key: value, value }, label))))
         ),
         groupSections.length === 0
           ? React.createElement("div", { style: { ...surfaceCard, padding: 28, textAlign: "center", fontFamily: "'Rajdhani'", color: "#718096" } }, "No fixtures configured for this season.")
@@ -2146,9 +1888,7 @@ export function ResultsScreen({
                 { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, marginBottom: 14, flexWrap: "wrap" } },
                 React.createElement("div", null,
                   React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
-                    React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, section.title),
-                    section.leg === "FIXTURE_1" && React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 11, color: "#4FC3F7", border: "1px solid rgba(79,195,247,.28)", background: "#4FC3F714", borderRadius: 999, padding: "4px 10px", letterSpacing: 1 } }, "FIXTURE 1"),
-                    section.leg === "FIXTURE_2" && React.createElement("span", { style: { fontFamily: "'Bebas Neue'", fontSize: 11, color: "#FFB84D", border: "1px solid rgba(255,184,77,.28)", background: "#FFB84D14", borderRadius: 999, padding: "4px 10px", letterSpacing: 1 } }, "FIXTURE 2")
+                    React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 1 } }, section.title.replace("Fixture 1", "First leg").replace("Fixture 2", "Second leg"))
                   ),
                   React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, section.subtitle)
                 ),
@@ -2157,159 +1897,48 @@ export function ResultsScreen({
               React.createElement(
                 "div",
                 { style: { display: "flex", flexDirection: "column", gap: 10 } },
-                section.fixtures.map((fixture) => {
-                  const homeColor = participantMeta.get(fixture.home)?.color || "#4FC3F7";
-                  const awayColor = participantMeta.get(fixture.away)?.color || "#FF6B35";
-                  const played = isPlayedFixture(fixture);
-                  const canEditFixture = isHost || selectedName === fixture.home || selectedName === fixture.away;
-                  const winnerLabel = played
-                    ? Number(fixture.homeGoals) > Number(fixture.awayGoals)
-                      ? `${fixture.home} won`
-                      : Number(fixture.homeGoals) < Number(fixture.awayGoals)
-                        ? `${fixture.away} won`
-                        : "Draw"
-                    : "Enter score to record result";
-
-                  const scoreBoxStyle = {
-                    width: 56,
-                    height: 56,
-                    background: "#05070d",
-                    border: "1px solid #273246",
-                    borderRadius: 12,
-                    color: "#FFD700",
-                    fontFamily: "'Bebas Neue'",
-                    fontSize: 26,
-                    textAlign: "center",
-                    padding: 0,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  };
-
-                  return React.createElement(
-                    "div",
-                    { key: fixture.id, style: { background: "#0c121ccc", border: "1px solid #1e2230", borderRadius: 18, padding: "18px 20px", display: "grid", gap: 14 } },
-                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
-                      React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" } },
-                        React.createElement("div", {
-                          style: {
-                            fontFamily: "'Bebas Neue'",
-                            fontSize: 11,
-                            color: played ? "#22c55e" : "#94a3b8",
-                            letterSpacing: 2,
-                            background: played ? "rgba(34,197,94,.12)" : "rgba(148,163,184,.12)",
-                            border: `1px solid ${played ? "rgba(34,197,94,.3)" : "rgba(148,163,184,.25)"}`,
-                            borderRadius: 999,
-                            padding: "4px 10px",
-                          }
-                        }, played ? "FT" : `R${fixture.round || 1}`),
-                        React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#667189" } }, played ? formatRelativeTime(fixture.scoreUpdatedAt) : "Awaiting result")
-                      ),
-                      React.createElement("div", {
-                        style: {
-                          fontFamily: "'Rajdhani'",
-                          fontSize: 11,
-                          color: savingFixtureId === fixture.id ? "#FFD700" : "#3d7a5a",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }
-                      },
-                        React.createElement("span", {
-                          style: {
-                            width: 6,
-                            height: 6,
-                            borderRadius: "50%",
-                            background: savingFixtureId === fixture.id ? "#FFD700" : "#3d7a5a",
-                            display: "inline-block",
-                          }
-                        }),
-                        savingFixtureId === fixture.id ? "Syncing…" : "Synced"
-                      )
-                    ),
-                    React.createElement("div", {
-                      style: {
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 16,
-                        flexWrap: "wrap",
-                      }
-                    },
-                      React.createElement("div", { style: { flex: "1 1 160px", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, minWidth: 0 } },
-                        React.createElement("div", { style: { minWidth: 0, textAlign: "right", fontFamily: "'Bebas Neue'", fontSize: 20, color: "#fff", letterSpacing: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, fixture.home),
-                        React.createElement(TeamBadge, { name: fixture.home, color: homeColor, small: true })
-                      ),
-                      React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" } },
-                        canEditFixture
-                          ? React.createElement("input", {
-                              type: "number",
-                              min: 0,
-                              value: fixture.homeGoals ?? "",
-                              onChange: (e) => handleFixtureGoalChange(section.groupLabel, fixture.id, "home", e.target.value),
-                              style: scoreBoxStyle,
-                            })
-                          : React.createElement("div", { style: scoreBoxStyle }, fixture.homeGoals ?? "–"),
-                        React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 16, color: "#4a5568" } }, "–"),
-                        canEditFixture
-                          ? React.createElement("input", {
-                              type: "number",
-                              min: 0,
-                              value: fixture.awayGoals ?? "",
-                              onChange: (e) => handleFixtureGoalChange(section.groupLabel, fixture.id, "away", e.target.value),
-                              style: scoreBoxStyle,
-                            })
-                          : React.createElement("div", { style: scoreBoxStyle }, fixture.awayGoals ?? "–")
-                      ),
-                      React.createElement("div", { style: { flex: "1 1 160px", display: "flex", alignItems: "center", gap: 10, minWidth: 0 } },
-                        React.createElement(TeamBadge, { name: fixture.away, color: awayColor, small: true }),
-                        React.createElement("div", { style: { minWidth: 0, fontFamily: "'Bebas Neue'", fontSize: 20, color: "#fff", letterSpacing: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, fixture.away)
-                      )
-                    ),
-                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", borderTop: "1px solid #1a2030", paddingTop: 12 } },
-                      React.createElement("div", {
-                        style: {
-                          fontFamily: "'Rajdhani'",
-                          fontSize: 12,
-                          color: played ? "#a7b1c2" : "#667189",
-                          letterSpacing: 0.4,
-                        }
-                      }, winnerLabel),
-                      canEditFixture && React.createElement("button", {
-                        onClick: () => setSelectedUploadFixture({ ...fixture, groupLabel: section.groupLabel }),
-                        style: {
-                          background: "#132337",
-                          color: "#8fe7c0",
-                          border: "1px solid rgba(143,231,192,.28)",
-                          borderRadius: 999,
-                          padding: "8px 16px",
-                          cursor: "pointer",
-                          fontFamily: "'Bebas Neue'",
-                          fontSize: 12,
-                          letterSpacing: 1,
-                          whiteSpace: "nowrap",
-                        }
-                      }, "UPLOAD STATS")
-                    )
-                  );
-                })
+                section.fixtures.map(fixture => React.createElement(ResultMatchRow, {
+                  key: fixture.id, fixture, groupLabel: section.groupLabel,
+                  canEdit: isHost || selectedName === fixture.home || selectedName === fixture.away,
+                  teamLabels: clubLabels,
+                  onSave: handleSaveFixtureScore, onUpload: setSelectedUploadFixture,
+                }))
               )
             ))
       ),
-      view === "squads" && React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(290px,1fr))", gap: 16 } },
-        [...participants].sort((a, b) => b.squad.length - a.squad.length).map((participant, index) => {
+      view === "squads" && React.createElement("section", { "aria-label": "Squads" },
+        React.createElement("div", { className: "results-view-heading" },
+          React.createElement("h2", null, "Squads"),
+          React.createElement("div", { className: "results-actions" },
+            React.createElement("button", { type: "button", onClick: () => setAnalyserOpen(true) }, "My formation & planner"),
+            React.createElement("button", { type: "button", onClick: () => { setHistoryOwnerFilter("ALL"); setView("history"); } }, "Browse all players")
+          )
+        ),
+        React.createElement("div", { className: "results-filters" },
+          React.createElement("label", null, "Team", React.createElement("select", { "aria-label": "Team", value: selectedSquad, onChange: event => setSelectedSquad(event.target.value) },
+            participants.map(p => React.createElement("option", { key: p.name, value: p.name }, p.name === selectedName ? `${p.name} (you)` : p.name))))
+        ),
+        participants.filter(p => p.name === (participants.some(p => p.name === selectedSquad) ? selectedSquad : participants[0]?.name)).map((participant) => {
+          const index = participants.findIndex(p => p.name === participant.name);
           const valid = participant.squad.length >= SQUAD_MIN && participant.squad.length <= SQUAD_MAX;
-          const spent = BUDGET - participant.budget;
-          return React.createElement("div", { key: participant.name, style: { ...surfaceCard, padding: 18 } },
-            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10 } },
+          const spent = participant.squad.reduce((sum, player) => sum + getPlayerAcquisitionPrice(player, tiers), 0);
+          return React.createElement("div", { key: participant.name, className: "results-squad" },
+            React.createElement("div", { className: "results-squad-header", style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" } },
               React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
                 React.createElement(TeamBadge, { name: participant.name, color: PCOLORS[index % PCOLORS.length] }),
                 React.createElement("div", null,
                   React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: "#fff", letterSpacing: 1 } }, participant.name),
-                  React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8290a8" } }, `${participant.squad.length} players · ${participant.budget}M left`)
+                   React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#8290a8" } }, `${participant.squad.length} players · ${participant.budget}M left`)
                 )
               ),
-              React.createElement("span", {
+               React.createElement("label", { className: "results-club-choice" }, "FC 26 · ISL club",
+                 React.createElement("select", { "aria-label": `ISL club for ${participant.name}`, value: clubSelections[participant.name] || "", disabled: participant.name !== user?.username || clubSaving,
+                   onChange: event => selectClub(event.target.value) },
+                   React.createElement("option", { value: "" }, "Choose your club"),
+                   ISL_CLUBS.map(club => React.createElement("option", { key: club.id, value: club.id }, club.note ? `${club.name} (${club.note})` : club.name))),
+                 React.createElement("small", { className: "results-muted" }, clubSaving ? "Saving your club…" : participant.name === user?.username ? "Shown on fixtures. Names vary by FC 26 squad update." : "This player chooses their own club.")
+               ),
+               !valid && React.createElement("span", {
                 style: {
                   fontFamily: "'Rajdhani'",
                   fontSize: 11,
@@ -2320,7 +1949,7 @@ export function ResultsScreen({
                   borderRadius: 999,
                   padding: "4px 10px",
                 }
-              }, valid ? "READY" : "CHECK")
+               }, "Incomplete squad")
             ),
             React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } },
               React.createElement("button", {
@@ -2337,50 +1966,49 @@ export function ResultsScreen({
                   letterSpacing: 1,
                 }
               }, "DOWNLOAD"),
-              React.createElement("span", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#718096", alignSelf: "center" } }, `${spent}M spent`)
+              React.createElement("span", { className: "results-muted", style: { alignSelf: "center" } }, `${spent}M spent`)
             ),
-            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+            React.createElement("ul", { className: "results-squad-list" },
               participant.squad.slice().sort((a, b) => b.rating - a.rating).map((player) => {
                 const td = getTierData(player.rating, tiers);
-                return React.createElement("div", {
+                return React.createElement("li", {
                   key: player.id,
-                  style: {
-                    background: td.bg,
-                    border: `1px solid ${td.border}`,
-                    borderRadius: 999,
-                    padding: "4px 8px",
-                    fontFamily: "'Rajdhani'",
-                    fontSize: 11,
-                    fontWeight: 700,
-                    display: "flex",
-                    gap: 5,
-                    alignItems: "center",
-                  }
                 },
                 React.createElement("span", { style: { color: td.color } }, player.rating),
-                React.createElement("span", { style: { color: "#e5edf8" } }, player.name.split(" ").pop()),
-                React.createElement("span", { style: { color: "#718096", fontSize: 10 } }, player.pos));
+                React.createElement("span", { className: "results-muted" }, player.pos),
+                React.createElement("strong", null, player.name),
+                React.createElement("span", { className: "results-muted" }, `${getPlayerAcquisitionPrice(player, tiers)}M`));
               })
             )
           );
         })
       ),
-      view === "history" && React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
-        React.createElement("div", { style: { ...surfaceCard, padding: 16, display: "grid", gridTemplateColumns: "minmax(180px,1.4fr) repeat(3,minmax(120px,.8fr))", gap: 10 } },
+      (view === "history" || view === "transfers") && React.createElement("section", { "aria-label": view === "transfers" ? "Transfers" : "Players", style: { display: "flex", flexDirection: "column", gap: 12 } },
+        React.createElement("div", { className: "results-view-heading" },
+          React.createElement("h2", null, view === "transfers" ? "Transfers" : "Players"),
+          view === "history" && React.createElement("button", { className: "results-button", onClick: () => setView("squads") }, "← Back to squads")
+        ),
+        React.createElement("div", { className: "results-filters" },
           React.createElement("input", {
+            type: "search", "aria-label": "Search players or owners",
             value: historySearch,
             onChange: (e) => setHistorySearch(e.target.value),
             placeholder: "Search player or owner…",
             style: { background: "#0d1119", color: "#fff", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 12px" },
           }),
           React.createElement("select", {
+            "aria-label": "Player owner",
             value: historyOwnerFilter,
             onChange: (e) => setHistoryOwnerFilter(e.target.value),
             style: { background: "#0d1119", color: "#fff", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 12px" },
           },
           React.createElement("option", { value: "ALL" }, "All owners"),
           inventoryParticipants.map((participant) => React.createElement("option", { key: participant.name, value: participant.name }, participant.name))),
+          React.createElement("details", { className: "results-extra-filters" },
+            React.createElement("summary", null, `More filters${historyPosFilter !== "ALL" || historyTierFilter !== "ALL" ? " · active" : ""}`),
+            React.createElement("div", { className: "results-filters", style: { margin: "10px 0 0" } },
           React.createElement("select", {
+            "aria-label": "Player position",
             value: historyPosFilter,
             onChange: (e) => setHistoryPosFilter(e.target.value),
             style: { background: "#0d1119", color: "#fff", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 12px" },
@@ -2388,36 +2016,39 @@ export function ResultsScreen({
           React.createElement("option", { value: "ALL" }, "All positions"),
           Array.from(new Set([...purchasedPlayers, ...unpurchasedPlayers].map((player) => player.pos).filter(Boolean))).sort().map((pos) => React.createElement("option", { key: pos, value: pos }, pos))),
           React.createElement("select", {
+            "aria-label": "Player tier",
             value: historyTierFilter,
             onChange: (e) => setHistoryTierFilter(e.target.value),
             style: { background: "#0d1119", color: "#fff", border: "1px solid #1f2937", borderRadius: 10, padding: "10px 12px" },
           },
           React.createElement("option", { value: "ALL" }, "All tiers"),
           Array.from(new Set([...purchasedPlayers, ...unpurchasedPlayers].map((player) => getTierKey(player.rating, tiers)))).sort().map((tier) => React.createElement("option", { key: tier, value: tier }, tier)))
+          ))
         ),
         React.createElement("div", { style: { ...surfaceCard, padding: 16, display: "grid", gap: 16 } },
           React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" } },
             React.createElement("div", null,
-              React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 24, color: "#fff", letterSpacing: 2 } }, "ALL PLAYERS"),
-              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 4 } }, "Purchased players, unpurchased pool, and live transfer listings in one place.")
+              view === "transfers" && React.createElement("p", { className: "results-muted", style: { margin: 0 } }, "Choose players from your squad to list for transfer.")
             ),
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: listingDeadlinePassed ? "#FFB84D" : "#8fe7c0", maxWidth: 420, textAlign: "right", display: "grid", gap: 4 } },
+            view === "transfers" && React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: listingDeadlinePassed ? "#FFB84D" : "#8fe7c0", maxWidth: "100%", display: "grid", gap: 4 } },
               React.createElement("div", null,
                 transferSyncLoading
                   ? "Syncing transfer window…"
                   : !transferSessionId
-                   ? `Pre-list players now. When the transfer window opens, these listings will already be synced.`
+                   ? "Listings will carry into the next transfer window."
                    : transferListingEditable
                      ? `Transfer window is live. List ${effectiveTransferWindow.requiredSalesMin || 2}-${effectiveTransferWindow.requiredSalesMax || 5} players from your own squad.`
                      : transferWindowAlreadyOpened
                        ? "Transfer listings are read-only here because the market is already open or closed."
                        : "Transfer listings are available here."
               ),
-              React.createElement("div", { style: { color: listingDeadlinePassed ? "#FFB84D" : "#8fe7c0", fontWeight: 700 } }, listingDeadlineText),
-              isHost && React.createElement("div", { style: { display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" } },
-                React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, minWidth: 360 } },
+              listingDeadlineValid && React.createElement("div", { style: { color: listingDeadlinePassed ? "#FFB84D" : "#8fe7c0", fontWeight: 700 } }, listingDeadlineText),
+              isHost && React.createElement("details", { className: "results-disclosure" },
+                React.createElement("summary", null, "Manage listing deadline"),
+                React.createElement("div", { className: "results-deadline-grid", style: { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 } },
                  React.createElement("input", {
-                   type: "date",
+                    type: "date",
+                    "aria-label": "Listing deadline date",
                    value: deadlineDateDraft,
                    onChange: (event) => setDeadlineDateDraft(event.target.value),
                    style: {
@@ -2430,7 +2061,8 @@ export function ResultsScreen({
                      fontSize: 12,
                    },
                  }),
-                 React.createElement("select", {
+                  React.createElement("select", {
+                    "aria-label": "Listing deadline hour",
                    value: deadlineHourDraft,
                    onChange: (event) => setDeadlineHourDraft(event.target.value),
                    style: {
@@ -2446,7 +2078,8 @@ export function ResultsScreen({
                    React.createElement("option", { key: "hour-placeholder", value: "" }, "Hour"),
                    ...DEADLINE_HOUR_OPTIONS.map((value) => React.createElement("option", { key: value, value }, value)),
                  ]),
-                 React.createElement("select", {
+                  React.createElement("select", {
+                    "aria-label": "Listing deadline minute",
                    value: deadlineMinuteDraft,
                    onChange: (event) => setDeadlineMinuteDraft(event.target.value),
                    style: {
@@ -2488,7 +2121,9 @@ export function ResultsScreen({
               )
             )
           ),
-          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10 } },
+          view === "transfers" && React.createElement("details", { className: "results-disclosure" },
+            React.createElement("summary", null, "Team budgets after listings"),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,190px),1fr))", gap: 10 } },
             expectedBudgetCards.map((item) => React.createElement("div", {
               key: item.name,
               style: {
@@ -2504,36 +2139,15 @@ export function ResultsScreen({
             React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 28, color: "#fff", letterSpacing: 1 } }, `${item.expectedBudget}M`),
             React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba" } }, `Carry ${item.baseBudget}M + listed ${item.listedGain}M`)
             ))
-          ),
-          React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10 } },
-            [
-              { key: "purchased", label: "PURCHASED IN AUCTION", count: filteredPurchasedPlayers.length, tone: "#FFD700" },
-              { key: "unpurchased", label: "UNPURCHASED POOL", count: filteredUnpurchasedPlayers.length, tone: "#4FC3F7" },
-              { key: "listed", label: "PUT UP FOR TRANSFER", count: filteredTransferListedPlayers.length, tone: "#FFB84D" },
-            ].map((item) => React.createElement("div", {
-              key: item.key,
-              style: {
-                background: `${item.tone}10`,
-                border: `1px solid ${item.tone}33`,
-                borderRadius: 14,
-                padding: "12px 14px",
-                display: "grid",
-                gap: 4,
-              }
-            },
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 10, fontWeight: 700, color: item.tone, letterSpacing: 1.5 } }, item.label),
-            React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 28, color: "#fff", letterSpacing: 1 } }, item.count),
-            React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 11, color: "#8ea0ba" } }, "Visible with current filters")
-            ))
-          ),
+          )),
           React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
             [
-              { key: "ALL", label: "SHOW ALL", tone: "#94a3b8" },
-              { key: "purchased", label: "PURCHASED", tone: "#FFD700" },
-              { key: "unpurchased", label: "UNPURCHASED", tone: "#4FC3F7" },
-              { key: "listed", label: "TRANSFER LIST", tone: "#FFB84D" },
-            ].map((item) => React.createElement("button", {
+              { key: "purchased", label: `Squad players (${filteredPurchasedPlayers.length})`, tone: "#FFD700" },
+              { key: "unpurchased", label: `Unpurchased (${filteredUnpurchasedPlayers.length})`, tone: "#4FC3F7" },
+              { key: "listed", label: `Listed (${filteredTransferListedPlayers.length})`, tone: "#FFB84D" },
+            ].filter(item => view === "history" || item.key !== "unpurchased").map((item) => React.createElement("button", {
               key: item.key,
+              "aria-pressed": historySectionFilter === item.key,
               onClick: () => setHistorySectionFilter(item.key),
               style: {
                 background: historySectionFilter === item.key ? `${item.tone}20` : "#0d1119",
@@ -2562,8 +2176,8 @@ export function ResultsScreen({
           [
             {
               key: "purchased",
-              title: "Purchased in auction",
-              subtitle: "Original auction buys. Owners can put up only their own players for transfer.",
+              title: historyOwnerFilter === selectedName ? "Your squad players" : "Squad players",
+              subtitle: "Players owned by auction participants.",
               rows: filteredPurchasedPlayers.slice().sort((a, b) => {
                 const ownerBias = Number(b.owner === selectedName) - Number(a.owner === selectedName);
                 if (ownerBias !== 0) return ownerBias;
@@ -2571,7 +2185,7 @@ export function ResultsScreen({
               }),
               empty: "No purchased players match the selected filters.",
               showOwner: true,
-              showAction: true,
+              showAction: view === "transfers",
               showTransferPrice: true,
             },
             {
@@ -2586,15 +2200,15 @@ export function ResultsScreen({
             },
             {
               key: "listed",
-              title: "Players put up for transfer",
+              title: "Listed players",
               subtitle: "This section stays synced with the mid-season transfer window listings.",
               rows: filteredTransferListedPlayers.slice().sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0)),
               empty: "No transfer-listed players match the selected filters.",
               showOwner: true,
-              showAction: false,
+              showAction: view === "transfers",
               showTransferPrice: true,
             },
-          ].filter((section) => historySectionFilter === "ALL" || historySectionFilter === section.key).map((section) => React.createElement("div", {
+          ].filter((section) => historySectionFilter === section.key).map((section) => React.createElement("div", {
             key: section.key,
             style: {
               background: "#0a0f17",
@@ -2608,63 +2222,40 @@ export function ResultsScreen({
           React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" } },
             React.createElement("div", null,
               React.createElement("div", { style: { fontFamily: "'Bebas Neue'", fontSize: 22, color: section.key === "listed" ? "#FFB84D" : section.key === "unpurchased" ? "#4FC3F7" : "#FFD700", letterSpacing: 2 } }, section.title),
-              React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6", marginTop: 4 } }, section.subtitle)
             ),
             React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#aab6ca" } }, `${section.rows.length} players`)
           ),
           section.rows.length === 0
             ? React.createElement("div", { style: { fontFamily: "'Rajdhani'", fontSize: 12, color: "#7f8ea6" } }, section.empty)
-            : React.createElement("div", { style: { display: "grid", gap: 10, maxHeight: 360, overflowY: "auto", paddingRight: 4 } }, section.rows.map((player, index) => renderInventoryRow(player, index, {
+            : React.createElement("div", { style: { display: "grid" } }, section.rows.slice(0, inventoryLimit).map((player, index) => renderInventoryRow(player, index, {
                 showOwner: section.showOwner,
                 showAction: section.showAction,
                 showTransferPrice: section.showTransferPrice,
-              })))
+              }))),
+          section.rows.length > inventoryLimit && React.createElement("button", { className: "results-button", onClick: () => setInventoryLimit(limit => limit + 25) }, `Show more (${section.rows.length - inventoryLimit} remaining)`)
           ))
         )
       ),
-      view === "awards" && React.createElement(BallonDorPanel, {
+      view === "awards" && React.createElement(React.Suspense, { fallback: React.createElement("p", { role: "status", className: "results-muted" }, "Loading awards…") }, React.createElement(BallonDorPanel, {
         auctionResultId,
         participants,
         fixtures: allFixtures,
         user,
         mode: "standings",
-      }),
-      selectedUploadFixture && React.createElement("div", {
-        onClick: () => setSelectedUploadFixture(null),
-        style: {
-          position: "fixed",
-          inset: 0,
-          zIndex: 40,
-          background: "rgba(3,6,12,.8)",
-          backdropFilter: "blur(4px)",
-          padding: "20px 12px",
-          overflowY: "auto",
-        }
-      },
-      React.createElement("div", {
-        onClick: (event) => event.stopPropagation(),
-        style: {
-          maxWidth: 1180,
-          margin: "0 auto",
-          background: "linear-gradient(180deg,#0b1018,#090d15)",
-          border: "1px solid #1d2433",
-          borderRadius: 20,
-          boxShadow: "0 20px 60px #00000066",
-          padding: 18,
-        }
-      },
-      React.createElement(BallonDorPanel, {
+      })),
+      selectedUploadFixture && React.createElement(React.Suspense, { fallback: React.createElement("p", { role: "status", className: "results-muted" }, "Loading player stats…") }, React.createElement(BallonDorPanel, {
         auctionResultId,
         participants,
         fixtures: allFixtures,
         user,
-        mode: "upload",
+        mode: "entry",
+        modal: true,
         leagueName,
         onClose: () => setSelectedUploadFixture(null),
         canGenerateLink: isHost,
         selectedFixtureId: selectedUploadFixture.id,
         allowedTeamNames: [selectedUploadFixture.home, selectedUploadFixture.away],
-      })))
+      }))
     )
   );
 }

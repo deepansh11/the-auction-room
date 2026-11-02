@@ -1,5 +1,4 @@
-import jwt from "jsonwebtoken";
-import { config } from "../config.js";
+import { verifyUserToken } from "../services/authToken.js";
 
 export async function requireUserAuth(req, res, next) {
   try {
@@ -9,11 +8,7 @@ export async function requireUserAuth(req, res, next) {
       return res.status(401).json({ error: "Missing bearer token" });
     }
 
-    if (!config.authJwtSecret) {
-      return res.status(503).json({ error: "AUTH_JWT_SECRET is not configured" });
-    }
-
-    const decoded = jwt.verify(token, config.authJwtSecret);
+    const decoded = verifyUserToken(token);
     req.user = decoded;
     return next();
   } catch (err) {
