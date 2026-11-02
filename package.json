@@ -8,6 +8,15 @@
     "dev:frontend": "vite",
     "dev:backend": "npm --prefix backend run dev",
     "build": "vite build",
+    "test": "node --test tests/*.test.mjs",
+    "test:ui": "node tests/browser-focus.mjs",
+    "test:ui:results": "node tests/browser-results.mjs",
+    "test:ui:setup": "node tests/browser-setup.mjs",
+    "test:ui:stats": "node tests/browser-stats.mjs",
+    "test:load": "node scripts/load-auction.mjs",
+    "test:firestore": "firebase emulators:exec --only firestore --project demo-fc-auction --config firebase.test.json \"node --test tests/firestore.test.mjs\"",
+    "test:load:actions": "node scripts/load-actions.mjs",
+    "test:load:firestore": "firebase emulators:exec --only firestore --project demo-fc-auction --config firebase.test.json \"node scripts/load-actions.mjs --firestore\"",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -15,8 +24,7 @@
     "papaparse": "^5.5.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "socket.io-client": "^4.8.3",
-    "tesseract.js": "^7.0.0"
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

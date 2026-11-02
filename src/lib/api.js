@@ -73,7 +73,7 @@ function safeStringify(value) {
 
 async function request(path, { method = "GET", body, token } = {}) {
   requireBaseUrl();
-  const headers = { "Content-Type": "application/json" };
+  const headers = body ? { "Content-Type": "application/json" } : {};
   if (token) headers.authorization = `Bearer ${token}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
@@ -101,6 +101,12 @@ async function request(path, { method = "GET", body, token } = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const error = buildRequestError(data?.error || `Request failed: ${res.status}`, res.status);
+    error.code = data?.code || error.code;
+    const retryAfter = res.headers.get("Retry-After");
+    const retryDelay = retryAfter
+      ? Math.max(0, Number.isFinite(Number(retryAfter)) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now())
+      : 0;
+    error.retryAfterMs = Number.isFinite(retryDelay) ? retryDelay : 0;
     if (token && res.status === 401) {
       notifyAuthExpired(error);
     }
@@ -195,6 +201,10 @@ export async function apiListResults(username, token) {
 export async function apiGetSession(sessionId, token) {
   const data = await request(`/api/sessions/${encodeURIComponent(sessionId)}`, { token });
   return normalizeSessionRecord(data?.session);
+}
+
+export function apiSubmitSessionAction(sessionId, command, token) {
+  return request(`/api/sessions/${encodeURIComponent(sessionId)}/actions`, { method: "POST", body: { command }, token });
 }
 
 export async function apiUpdateSession(sessionId, session, token) {
@@ -348,6 +358,16 @@ export async function apiSaveFixtures(auctionResultId, fixtures, token) {
 export async function apiGetFixtures(auctionResultId, token) {
   const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/fixtures`, { token });
   return typeof data?.fixtures === "object" ? data.fixtures : {};
+}
+
+export async function apiGetClubSelections(auctionResultId, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/club-selections`, { token });
+  return data?.clubSelections || {};
+}
+
+export async function apiSaveClubSelection(auctionResultId, clubId, token) {
+  const data = await request(`/api/results/${encodeURIComponent(auctionResultId)}/club-selection`, { method: "PUT", body: { clubId }, token });
+  return data?.clubSelections || {};
 }
 
 export async function apiGetLeaderboard(token) {

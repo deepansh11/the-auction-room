@@ -3,8 +3,12 @@ import crypto from "node:crypto";
 import { requireUserAuth } from "../middleware/userAuth.js";
 import { normalizeFirebaseError } from "../services/firebaseErrors.js";
 import { getFirebase } from "../services/firebaseService.js";
-import { normalizeAuctionResultDocument } from "../services/sessionState.js";
+import { normalizeAuctionResultDocument, normalizeSessionDocument } from "../services/sessionState.js";
 import { sanitizeSessionForViewer } from "../services/sessionView.js";
+import { emitSessionUpdate } from "../services/realtime.js";
+import { saveManualSubmission } from "../services/performanceSubmission.js";
+import { normalizeFixtureLeg } from "../../shared/fixtureLegs.js";
+import { readClubSelections, saveClubSelection } from "../services/clubSelections.js";
 
 function canAccessResult(result, username) {
   if (!result || !username) return false;
@@ -55,6 +59,9 @@ function pickUploadParticipants(result, fixtureId = "") {
             pos: String(player?.pos || "").trim(),
           }))
         : [],
+      soldPlayers: Array.isArray(participant.soldPlayers)
+        ? participant.soldPlayers.map(player => ({ id: player.id, name: String(player.name || "").trim(), pos: String(player.pos || "").trim() }))
+        : [],
     }));
 }
 
@@ -67,31 +74,6 @@ async function loadPerformanceSubmissions(db, auctionResultId, fixtureId = "") {
     .map((doc) => ({ id: doc.id, ...doc.data() }))
     .filter((submission) => !fixtureId || String(submission?.fixtureId) === String(fixtureId))
     .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
-}
-
-function sanitizeSubmissionIdPart(value) {
-  return String(value || "")
-    .trim()
-    .replace(/[^a-z0-9_-]+/gi, "-")
-    .replace(/^-+|-+$/g, "")
-    .toLowerCase();
-}
-
-function normalizePerformancePlayer(player, index) {
-  if (!player || typeof player !== "object") return null;
-  const name = String(player.name || "").trim();
-  if (!name) return null;
-  const rating = Number(player.rating);
-  const goals = Number(player.goals || 0);
-  const assists = Number(player.assists || 0);
-  return {
-    id: String(player.id || `row-${index + 1}`),
-    name,
-    rating: Number.isFinite(rating) ? rating : null,
-    goals: Number.isFinite(goals) ? goals : 0,
-    assists: Number.isFinite(assists) ? assists : 0,
-    isPlayerOfTheMatch: Boolean(player.isPlayerOfTheMatch),
-  };
 }
 
 function getBaseRoundCount(teamCount) {
@@ -201,7 +183,8 @@ function createTransferSessionFromResult(result) {
     groupCount: 0,
     groups: {},
     fixtures: {},
-    fixtureLeg: result.fixtureLeg === "double" ? "double" : "single",
+    fixtureLeg: normalizeFixtureLeg(result.fixtureLeg),
+    clubSelections: result.clubSelections || {},
     knockoutFormat: ["semiFinal", "quarterFinal", "finalOnly"].includes(result.knockoutFormat)
       ? result.knockoutFormat
       : "semiFinal",
@@ -263,6 +246,21 @@ router.get("/results", requireUserAuth, async (req, res) => {
     const normalized = normalizeFirebaseError(err, "Failed to list results", 500);
     return res.status(normalized.status).json({ error: normalized.error });
   }
+});
+
+router.get("/results/:auctionResultId/club-selections", requireUserAuth, async (req, res) => {
+  try {
+    const clubSelections = await readClubSelections(getFirebase().db, req.params.auctionResultId, req.user.username);
+    return res.json({ clubSelections });
+  } catch (error) { return res.status(error.status || 503).json({ error: error.status ? error.message : "Could not load club choices" }); }
+});
+
+router.put("/results/:auctionResultId/club-selection", requireUserAuth, async (req, res) => {
+  try {
+    const saved = await saveClubSelection(getFirebase().db, req.params.auctionResultId, req.user.username, req.body?.clubId);
+    if (saved.live) emitSessionUpdate(saved.live);
+    return res.json({ clubSelections: saved.clubSelections });
+  } catch (error) { return res.status(error.status || 503).json({ error: error.status ? error.message : "Could not save your club choice" }); }
 });
 
 router.get("/results/:auctionResultId/fixtures", requireUserAuth, async (req, res) => {
@@ -391,66 +389,8 @@ router.post("/results/:auctionResultId/ballon-dor-submissions", requireUserAuth,
     if (!auctionResultId || !submission || typeof submission !== "object") {
       return res.status(400).json({ error: "auctionResultId and submission are required" });
     }
-
-    const { db } = getFirebase();
-    const resultSnap = await db.collection("auctionResults").doc(auctionResultId).get();
-    if (!resultSnap.exists) return res.status(404).json({ error: "Result not found" });
-    const result = normalizeAuctionResultDocument(resultSnap.data());
-    if (!canAccessResult(result, username)) {
-      return res.status(403).json({ error: "You are not allowed to upload performance data for this league" });
-    }
-
-    const mappedParticipantName = String(submission.mappedParticipantName || "").trim();
-    const fixtureId = String(submission.fixtureId || "").trim();
-    if (!mappedParticipantName || !fixtureId) {
-      return res.status(400).json({ error: "mappedParticipantName and fixtureId are required" });
-    }
-    if (!Array.isArray(result.participantNames) || !result.participantNames.includes(mappedParticipantName)) {
-      return res.status(400).json({ error: "Selected team is not part of this league" });
-    }
-    const fixtureMatch = findFixtureGroup(result.fixtures, fixtureId);
-    if (!fixtureMatch) {
-      return res.status(404).json({ error: "Fixture not found" });
-    }
-    if (![fixtureMatch.fixture.home, fixtureMatch.fixture.away].includes(mappedParticipantName)) {
-      return res.status(400).json({ error: "Selected team is not part of this fixture" });
-    }
-
-    const players = (Array.isArray(submission.players) ? submission.players : [])
-      .map(normalizePerformancePlayer)
-      .filter(Boolean);
-    if (players.length === 0) {
-      return res.status(400).json({ error: "At least one reviewed player row is required" });
-    }
-
-    const now = Date.now();
-    const submissionId = [
-      sanitizeSubmissionIdPart(auctionResultId),
-      sanitizeSubmissionIdPart(fixtureId),
-      sanitizeSubmissionIdPart(mappedParticipantName),
-    ].join("__");
-
-    const payload = {
-      auctionResultId,
-      fixtureId,
-      fixtureLabel: String(submission.fixtureLabel || fixtureId),
-      mappedParticipantName,
-      sourceFileName: String(submission.sourceFileName || ""),
-      validation: submission.validation && typeof submission.validation === "object"
-        ? {
-            status: submission.validation.status === "ready" ? "ready" : "needs-review",
-            warnings: Array.isArray(submission.validation.warnings) ? submission.validation.warnings.map((item) => String(item || "")) : [],
-            detectedPlayerCount: Number(submission.validation.detectedPlayerCount) || players.length,
-          }
-        : { status: "needs-review", warnings: [], detectedPlayerCount: players.length },
-      players,
-      submittedBy: username,
-      updatedAt: now,
-      createdAt: now,
-    };
-
-    await db.collection("auctionPerformanceSubmissions").doc(submissionId).set(payload, { merge: true });
-    return res.status(201).json({ submission: { id: submissionId, ...payload } });
+    const saved = await saveManualSubmission({ db: getFirebase().db, auctionResultId, submission, username });
+    return res.status(201).json({ submission: saved });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to save Ballon dOr submission", 500);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -469,20 +409,24 @@ router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async
 
     const { db } = getFirebase();
     const resultRef = db.collection("auctionResults").doc(auctionResultId);
-    const resultSnap = await resultRef.get();
-    if (!resultSnap.exists) return res.status(404).json({ error: "Result not found" });
+    const updatedResult = await db.runTransaction(async transaction => {
+    const resultSnap = await transaction.get(resultRef);
+    if (!resultSnap.exists) throw Object.assign(new Error("Result not found"), { status: 404 });
     const result = normalizeAuctionResultDocument(resultSnap.data());
     if (!canAccessResult(result, username)) {
-      return res.status(403).json({ error: "You are not allowed to update transfer listings for this league" });
+      throw Object.assign(new Error("You are not allowed to update transfer listings for this league"), { status: 403 });
     }
     if (String(result.transferWindow?.activeSessionId || "")) {
-      return res.status(409).json({ error: "Transfer window is already active. Update listings from the live transfer session." });
+      throw Object.assign(new Error("Transfer window is already active. Update listings from the live transfer session."), { status: 409 });
+    }
+    if (result.transferWindow?.listingDeadlineAt && Date.now() >= result.transferWindow.listingDeadlineAt) {
+      throw Object.assign(new Error("Transfer listing deadline has passed"), { status: 409 });
     }
 
     const participants = Array.isArray(result.participants) ? result.participants : [];
     const ownerParticipant = participants.find((participant) => participant.name === username);
     if (!ownerParticipant) {
-      return res.status(403).json({ error: "Only team owners can manage their transfer listings" });
+      throw Object.assign(new Error("Only team owners can manage their transfer listings"), { status: 403 });
     }
 
     const squad = Array.isArray(ownerParticipant.squad) ? ownerParticipant.squad : [];
@@ -491,16 +435,16 @@ router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async
     const existingSquadPlayer = squad.find((player) => Number(player?.id) === playerId);
 
     if (listed && !existingSquadPlayer) {
-      return res.status(404).json({ error: "Player not found in your squad" });
+      throw Object.assign(new Error("Player not found in your squad"), { status: 404 });
     }
     if (!listed && !existingSoldPlayer) {
-      return res.status(404).json({ error: "Player is not currently listed for transfer" });
+      throw Object.assign(new Error("Player is not currently listed for transfer"), { status: 404 });
     }
 
     const requiredSalesMin = Number(result.transferWindow?.requiredSalesMin || 2);
     const requiredSalesMax = Number(result.transferWindow?.requiredSalesMax || 5);
     if (listed && soldPlayers.length >= requiredSalesMax) {
-      return res.status(409).json({ error: `You can list at most ${requiredSalesMax} players` });
+      throw Object.assign(new Error(`You can list at most ${requiredSalesMax} players`), { status: 409 });
     }
 
     const listingPrice = getTransferSalePrice(existingSquadPlayer || existingSoldPlayer, result.tiers);
@@ -568,7 +512,7 @@ router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async
       updatedAt: now,
     };
 
-    await resultRef.set({
+    transaction.set(resultRef, {
       participants: nextParticipants,
       carriedBudgets: nextCarriedBudgets,
       expectedBudgets: buildExpectedBudgets(nextParticipants),
@@ -577,7 +521,9 @@ router.put("/results/:auctionResultId/transfer-listings", requireUserAuth, async
       updatedAt: now,
     }, { merge: true });
 
-    return res.json({ result: nextResult });
+    return nextResult;
+    });
+    return res.json({ result: updatedResult });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to update transfer listings", 500);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -594,68 +540,8 @@ router.post("/public/results/:auctionResultId/ballon-dor-submissions", async (re
       return res.status(400).json({ error: "Upload token and submission are required" });
     }
 
-    const { db } = getFirebase();
-    const resultSnap = await db.collection("auctionResults").doc(auctionResultId).get();
-    if (!resultSnap.exists) return res.status(404).json({ error: "Result not found" });
-    const result = normalizeAuctionResultDocument(resultSnap.data());
-    if (String(result.ballonDorUploadToken || "") !== token) {
-      return res.status(403).json({ error: "Upload link is invalid or expired" });
-    }
-
-    const mappedParticipantName = String(submission.mappedParticipantName || "").trim();
-    const fixtureId = String(submission.fixtureId || "").trim();
-    if (!mappedParticipantName || !fixtureId) {
-      return res.status(400).json({ error: "mappedParticipantName and fixtureId are required" });
-    }
-    if (requestedFixtureId && requestedFixtureId !== fixtureId) {
-      return res.status(400).json({ error: "This upload link is locked to a different fixture" });
-    }
-    if (!Array.isArray(result.participantNames) || !result.participantNames.includes(mappedParticipantName)) {
-      return res.status(400).json({ error: "Selected team is not part of this league" });
-    }
-    const fixtureMatch = findFixtureGroup(result.fixtures, fixtureId);
-    if (!fixtureMatch) {
-      return res.status(404).json({ error: "Fixture not found" });
-    }
-    if (![fixtureMatch.fixture.home, fixtureMatch.fixture.away].includes(mappedParticipantName)) {
-      return res.status(400).json({ error: "Selected team is not part of this fixture" });
-    }
-
-    const players = (Array.isArray(submission.players) ? submission.players : [])
-      .map(normalizePerformancePlayer)
-      .filter(Boolean);
-    if (players.length === 0) {
-      return res.status(400).json({ error: "At least one reviewed player row is required" });
-    }
-
-    const now = Date.now();
-    const submissionId = [
-      sanitizeSubmissionIdPart(auctionResultId),
-      sanitizeSubmissionIdPart(fixtureId),
-      sanitizeSubmissionIdPart(mappedParticipantName),
-    ].join("__");
-
-    const payload = {
-      auctionResultId,
-      fixtureId,
-      fixtureLabel: String(submission.fixtureLabel || fixtureId),
-      mappedParticipantName,
-      sourceFileName: String(submission.sourceFileName || ""),
-      validation: submission.validation && typeof submission.validation === "object"
-        ? {
-            status: submission.validation.status === "ready" ? "ready" : "needs-review",
-            warnings: Array.isArray(submission.validation.warnings) ? submission.validation.warnings.map((item) => String(item || "")) : [],
-            detectedPlayerCount: Number(submission.validation.detectedPlayerCount) || players.length,
-          }
-        : { status: "needs-review", warnings: [], detectedPlayerCount: players.length },
-      players,
-      submittedBy: String(submission.submittedBy || "public-upload"),
-      updatedAt: now,
-      createdAt: now,
-    };
-
-    await db.collection("auctionPerformanceSubmissions").doc(submissionId).set(payload, { merge: true });
-    return res.status(201).json({ submission: { id: submissionId, ...payload } });
+    const saved = await saveManualSubmission({ db: getFirebase().db, auctionResultId, submission, publicToken: token, requestedFixtureId });
+    return res.status(201).json({ submission: saved });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to save Ballon dOr submission", 500);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -953,37 +839,40 @@ router.post("/results/:auctionResultId/transfer-window", requireUserAuth, async 
     const username = String(req.user?.username || "").trim();
     const { db } = getFirebase();
     const resultRef = db.collection("auctionResults").doc(auctionResultId);
-    const resultSnap = await resultRef.get();
-    if (!resultSnap.exists) return res.status(404).json({ error: "Result not found" });
+    const created = await db.runTransaction(async transaction => {
+    const resultSnap = await transaction.get(resultRef);
+    if (!resultSnap.exists) throw Object.assign(new Error("Result not found"), { status: 404 });
 
     const result = normalizeAuctionResultDocument(resultSnap.data());
     if (!username || result.host !== username) {
-      return res.status(403).json({ error: "Only the host can open a transfer window" });
+      throw Object.assign(new Error("Only the host can open a transfer window"), { status: 403 });
     }
     if (!isFirstRoundComplete(result)) {
-      return res.status(409).json({ error: "Complete every first-round fixture before opening the transfer window" });
+      throw Object.assign(new Error("Complete every first-round fixture before opening the transfer window"), { status: 409 });
     }
 
     const existingTransferId = String(result.transferWindow?.activeSessionId || "");
     if (existingTransferId) {
-      const existingSessionSnap = await db.collection("sessions").doc(existingTransferId).get();
+      const existingSessionSnap = await transaction.get(db.collection("sessions").doc(existingTransferId));
       if (existingSessionSnap.exists) {
         const existingSession = existingSessionSnap.data();
-        return res.status(200).json({ session: sanitizeSessionForViewer(existingSession, username) });
+        if (!["complete", "cancelled"].includes(existingSession.status)) return { session: existingSession, status: 200 };
       }
     }
 
     const transferSession = createTransferSessionFromResult(result);
-    const batch = db.batch();
-    batch.set(db.collection("sessions").doc(String(transferSession.id)), transferSession, { merge: true });
+    const roomRef = transferSession.roomCode ? db.collection("rooms").doc(transferSession.roomCode.toUpperCase()) : null;
+    if (roomRef && (await transaction.get(roomRef)).exists) throw Object.assign(new Error("Room code is already in use by a live auction"), { status: 409 });
+    transferSession.revision = 0;
+    transaction.set(db.collection("sessions").doc(String(transferSession.id)), transferSession);
     if (transferSession.roomCode) {
-      batch.set(db.collection("rooms").doc(String(transferSession.roomCode).toUpperCase()), {
+      transaction.set(db.collection("rooms").doc(String(transferSession.roomCode).toUpperCase()), {
         sessionId: String(transferSession.id),
         roomCode: String(transferSession.roomCode).toUpperCase(),
         updatedAt: Date.now(),
       }, { merge: true });
     }
-    batch.set(resultRef, {
+    transaction.set(resultRef, {
       transferWindow: {
         ...(result.transferWindow || {}),
         activeSessionId: String(transferSession.id),
@@ -994,9 +883,9 @@ router.post("/results/:auctionResultId/transfer-window", requireUserAuth, async 
       },
       updatedAt: Date.now(),
     }, { merge: true });
-    await batch.commit();
-
-    return res.status(201).json({ session: sanitizeSessionForViewer(transferSession, username) });
+    return { session: transferSession, status: 201 };
+    });
+    return res.status(created.status).json({ session: sanitizeSessionForViewer(created.session, username) });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to open transfer window", 500);
     return res.status(normalized.status).json({ error: normalized.error });
@@ -1013,12 +902,13 @@ router.put("/results/:auctionResultId/transfer-window", requireUserAuth, async (
     const username = String(req.user?.username || "").trim();
     const { db } = getFirebase();
     const resultRef = db.collection("auctionResults").doc(auctionResultId);
-    const resultSnap = await resultRef.get();
-    if (!resultSnap.exists) return res.status(404).json({ error: "Result not found" });
+    const updated = await db.runTransaction(async transaction => {
+    const resultSnap = await transaction.get(resultRef);
+    if (!resultSnap.exists) throw Object.assign(new Error("Result not found"), { status: 404 });
 
     const result = normalizeAuctionResultDocument(resultSnap.data());
     if (!username || result.host !== username) {
-      return res.status(403).json({ error: "Only the host can update the transfer window" });
+      throw Object.assign(new Error("Only the host can update the transfer window"), { status: 403 });
     }
 
     const listingDeadlineAt = normalizeDeadlineAt(req.body?.listingDeadlineAt);
@@ -1029,29 +919,31 @@ router.put("/results/:auctionResultId/transfer-window", requireUserAuth, async (
       listingDeadlineSetAt: listingDeadlineAt ? now : null,
     };
 
-    await resultRef.set({
-      transferWindow: nextTransferWindow,
-      updatedAt: now,
-    }, { merge: true });
-
+    let live = null;
     const activeSessionId = String(result.transferWindow?.activeSessionId || "");
     if (activeSessionId) {
       const sessionRef = db.collection("sessions").doc(activeSessionId);
-      const sessionSnap = await sessionRef.get();
+      const sessionSnap = await transaction.get(sessionRef);
       if (sessionSnap.exists) {
         const session = normalizeSessionDocument(sessionSnap.data());
-        await sessionRef.set({
+        live = { ...session,
           transferWindow: {
             ...(session.transferWindow || {}),
             listingDeadlineAt,
             listingDeadlineSetAt: listingDeadlineAt ? now : null,
           },
           updatedAt: now,
-        }, { merge: true });
+          revision: Number(session.revision || 0) + 1,
+        };
+        transaction.update(sessionRef, { transferWindow: live.transferWindow, updatedAt: now, revision: live.revision });
       }
     }
 
-    return res.json({ result: { ...result, transferWindow: nextTransferWindow, updatedAt: now } });
+    transaction.set(resultRef, { transferWindow: nextTransferWindow, updatedAt: now }, { merge: true });
+    return { result: { ...result, transferWindow: nextTransferWindow, updatedAt: now }, live };
+    });
+    if (updated.live) emitSessionUpdate(updated.live);
+    return res.json({ result: updated.result });
   } catch (err) {
     const normalized = normalizeFirebaseError(err, "Failed to update transfer deadline", 500);
     return res.status(normalized.status).json({ error: normalized.error });

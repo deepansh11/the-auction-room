@@ -3,12 +3,6 @@ import { apiAbandonSession, apiCreateRoom, apiGetCurrentUser, apiGetRoom, apiJoi
 import { TIERS } from "../game/constants.js";
 import { Spinner } from "../components/Spinner.jsx";
 import { AuthScreen } from "../screens/AuthScreen.jsx";
-import { PlayerDiscovery } from "../screens/PlayerDiscovery.jsx";
-import { SetupScreen } from "../screens/SetupScreen.jsx";
-import { DrawScreen } from "../screens/DrawScreen.jsx";
-import { BiddingScreen } from "../screens/BiddingScreen.jsx";
-import { ResultsScreen } from "../screens/ResultsScreen.jsx";
-import { BallonDorPanel } from "../components/BallonDorPanel.jsx";
 import { BoisBanner } from "../components/BoisBanner.jsx";
 import { BackgroundCarousel } from "../components/BackgroundCarousel.jsx";
 import { FOOTBALL_THEME } from "../theme/footballTheme.js";
@@ -16,11 +10,20 @@ import { getBallonDorUploadParamsFromUrl, getRoomCodeFromUrl, isValidRoomCode } 
 import { clearLocalAuthUser, getLocalAuthUser, setLocalAuthUser } from "../lib/localAuth.js";
 import { setAnalyticsAuthToken, trackEvent, trackScreenView } from "../lib/analytics.js";
 import { normalizeSessionRecord } from "../utils/sessionData.js";
+import { auctionRenderMetric, startBrowserMonitoring } from "../lib/browserMetrics.js";
+
+const PlayerDiscovery = React.lazy(() => import("../screens/PlayerDiscovery.jsx").then(module => ({ default: module.PlayerDiscovery })));
+const SetupScreen = React.lazy(() => import("../screens/SetupScreen.jsx").then(module => ({ default: module.SetupScreen })));
+const DrawScreen = React.lazy(() => import("../screens/DrawScreen.jsx").then(module => ({ default: module.DrawScreen })));
+const BiddingScreen = React.lazy(() => import("../screens/BiddingScreen.jsx").then(module => ({ default: module.BiddingScreen })));
+const ResultsScreen = React.lazy(() => import("../screens/ResultsScreen.jsx").then(module => ({ default: module.ResultsScreen })));
+const BallonDorPanel = React.lazy(() => import("../components/BallonDorPanel.jsx").then(module => ({ default: module.BallonDorPanel })));
 
 /* ─────────────────────────────────────────────────────────────────────────────
    ROOT APP
 ───────────────────────────────────────────────────────────────────────────── */
 export default function App() {
+  React.useEffect(() => startBrowserMonitoring(), []);
   const [user, setUser] = React.useState(null);
   const [screen, setScreen] = React.useState("auth"); // auth | discover | setup | draw | bidding | results | performance-upload
   const [session, setSession] = React.useState(null);
@@ -335,9 +338,10 @@ export default function App() {
     setScreen("discover");
   };
 
-  const handleBiddingEnd = async (participants) => {
+  const handleBiddingEnd = async (participants, latestSession) => {
     trackEvent("auction_completed", { sessionId: session?.id, participantCount: participants?.length || 0 });
     setFinalParticipants(participants);
+    if (latestSession) setSession(latestSession);
     setScreen("results");
   };
 
@@ -415,7 +419,8 @@ export default function App() {
       overflowX: "hidden",
     }
   },
-    React.createElement(BackgroundCarousel, null),
+    React.createElement(BackgroundCarousel, { paused: screen === "bidding" || screen === "draw" }),
+    React.createElement(React.Suspense, { fallback: React.createElement("div", { role: "status", style: { minHeight: "100vh", display: "grid", placeItems: "center" } }, React.createElement(Spinner, null), "Loading screen…") },
     React.createElement("div", { style: { position: "relative", zIndex: 1 } },
       user?.role === "bois" && React.createElement(BoisBanner, null),
       screen === "auth" && React.createElement(AuthScreen, { onAuth:handleAuth, pendingRoomCode }),
@@ -438,17 +443,17 @@ export default function App() {
         React.createElement(DrawScreen, {
           session,
           user,
-          onComplete: () => setScreen("bidding"),
+          onComplete: latest => { if (latest) setSession(latest); setScreen("bidding"); },
           onAbandon: handleAbandonSession,
         })
       ),
       screen === "bidding" && session && React.createElement(React.Fragment, null,
-        React.createElement(BiddingScreen, {
+        React.createElement(React.Profiler, { id: "auction", onRender: auctionRenderMetric }, React.createElement(BiddingScreen, {
           session, user, wishlists,
           onWishlist: handleWishlist,
           onEnd: handleBiddingEnd,
           onAbandon: handleAbandonSession,
-        })
+        }))
       ),
       screen === "results" && finalParticipants && React.createElement(React.Fragment, null,
         React.createElement(ResultsScreen, {
@@ -477,7 +482,7 @@ export default function App() {
           auctionResultId: publicBallonDorUpload.auctionResultId,
           publicAccessToken: publicBallonDorUpload.token,
           selectedFixtureId: publicBallonDorUpload.fixtureId || "",
-          mode: "upload",
+          mode: "entry",
           onClose: () => {
             window.history.replaceState({}, document.title, window.location.pathname);
             setPublicBallonDorUpload(null);
@@ -486,6 +491,6 @@ export default function App() {
           user,
         })
       )
-    )
+    ))
   );
 }

@@ -1,3 +1,5 @@
+import { normalizeFixtureLeg } from "../../shared/fixtureLegs.js";
+
 function omitUndefinedFields(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   return Object.fromEntries(
@@ -98,7 +100,7 @@ export function normalizeSessionDocument(session) {
     groupCount: Number(session.groupCount) || 0,
     groups: normalizeGroups(session.groups),
     fixtures: normalizeFixtureMap(session.fixtures),
-    fixtureLeg: session.fixtureLeg === "double" ? "double" : "single",
+    fixtureLeg: normalizeFixtureLeg(session.fixtureLeg),
     knockoutFormat: ["semiFinal", "quarterFinal", "finalOnly"].includes(session.knockoutFormat)
       ? session.knockoutFormat
       : "semiFinal",

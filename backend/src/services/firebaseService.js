@@ -9,6 +9,12 @@ function decodePrivateKey(value) {
 }
 
 function assertFirebaseConfigured() {
+  if (process.env.FIRESTORE_EMULATOR_HOST) {
+    if (!/^(127\.0\.0\.1|localhost):\d+$/.test(process.env.FIRESTORE_EMULATOR_HOST) || !config.firebaseProjectId.startsWith("demo-")) {
+      throw Object.assign(new Error("Emulator access requires a loopback host and demo- project ID"), { status: 503 });
+    }
+    return;
+  }
   if (!config.firebaseProjectId || !config.firebaseClientEmail || !config.firebasePrivateKey) {
     throw Object.assign(new Error("Firebase is not configured"), { status: 503 });
   }
@@ -20,11 +26,11 @@ export function getFirebase() {
   assertFirebaseConfigured();
 
   const app = getApps()[0] || initializeApp({
-    credential: cert({
+    ...(process.env.FIRESTORE_EMULATOR_HOST ? { projectId: config.firebaseProjectId } : { credential: cert({
       projectId: config.firebaseProjectId,
       clientEmail: config.firebaseClientEmail,
       privateKey: decodePrivateKey(config.firebasePrivateKey),
-    }),
+    }) }),
   });
 
   cached = {

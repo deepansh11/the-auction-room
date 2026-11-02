@@ -153,18 +153,23 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
     ];
   };
 
+  // Keep planner hooks mounted, but do not render the hidden pitch/stat subtree.
+  if (hidden) return null;
+
   return React.createElement("div", {
+    className: "auction-analyser",
     onClick: e => e.target === e.currentTarget && onClose(),
     style:{ position:"fixed", inset:0, background:"rgba(0,0,0,.88)",
       zIndex:1000, display: hidden ? "none" : "flex", alignItems:"center", justifyContent:"center",
       padding:16, backdropFilter:"blur(8px)", animation:"fadeIn .2s ease" }
   },
     React.createElement("div", {
+      className: "auction-analyser-panel",
       style:{ background:"#0a0c12", border:"1px solid #1e2230", borderRadius:16,
         width:"100%", maxWidth:860, maxHeight:"92vh", overflow:"auto",
         padding:22, animation:"scaleIn .25s ease" }
     },
-      React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 } },
+      React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 } },
         React.createElement("div", null,
           React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:26, color:"#fff", letterSpacing:3 } }, "SQUAD ANALYSER"),
           React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:12, color:"#555", letterSpacing:1 } }, "Pitch view · Wishlist · Formation analysis")
@@ -201,7 +206,7 @@ export function SquadAnalyser({ participants, wishlists, players=[], tiers=TIERS
         )
       ),
 
-      tab === "pitch" && React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 200px", gap:18 } },
+      tab === "pitch" && React.createElement("div", { className: "auction-analyser-pitch", style:{ display:"grid", gridTemplateColumns:"minmax(0, 1fr) 200px", gap:18 } },
         React.createElement("div", null,
           React.createElement("div", { style:{ marginBottom:10, display:"flex", alignItems:"center", gap:8 } },
             React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#555", letterSpacing:2 } }, "FORMATION"),

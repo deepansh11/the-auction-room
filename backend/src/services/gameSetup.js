@@ -7,6 +7,7 @@
  * unfair look at information that's supposed to stay hidden until the game reveals it.
  */
 import { rerollMysteryCandidates } from "./mysteryCard.js";
+import { expandFixtureLegs, fixtureLegCount, normalizeFixtureLeg } from "../../shared/fixtureLegs.js";
 
 const POS_GROUPS = {
   GK: ["GK"],
@@ -192,11 +193,11 @@ function generateBalancedExtra(teams, extraPerTeam, idxOffset, label, roundOffse
   return extra;
 }
 
-/** Mirrors src/game/groupsFixtures.js#buildGroupFixtures. leg = "double" | "single". */
+/** Mirrors src/game/groupsFixtures.js#buildGroupFixtures. Supports one, two or three legs. */
 function buildGroupFixtures(groups, leg = "double") {
   const allSizes = Object.values(groups || {}).map((t) => (t || []).filter(Boolean).length);
   const maxSize = allSizes.length > 0 ? Math.max(...allSizes) : 0;
-  const legFactor = leg === "double" ? 2 : 1;
+  const legFactor = fixtureLegCount(leg);
   let targetPerTeam = legFactor * Math.max(maxSize - 1, 0);
 
   const hasOddGroupWithOddExtra = allSizes.some((m) => {
@@ -215,24 +216,7 @@ function buildGroupFixtures(groups, leg = "double") {
     const single = generateRoundRobinFixtures(cleanTeams);
     const maxRound = single.length > 0 ? Math.max(...single.map((f) => f.round)) : 0;
 
-    const base = [];
-    if (leg === "double") {
-      single.forEach((f, i) => {
-        base.push({ id: `${label}-${i * 2}`, ...f, homeGoals: null, awayGoals: null });
-        base.push({
-          id: `${label}-${i * 2 + 1}`,
-          round: f.round + maxRound,
-          home: f.away,
-          away: f.home,
-          homeGoals: null,
-          awayGoals: null,
-        });
-      });
-    } else {
-      single.forEach((f, i) => {
-        base.push({ id: `${label}-${i}`, ...f, homeGoals: null, awayGoals: null });
-      });
-    }
+    const base = expandFixtureLegs(single, label, legFactor);
 
     const currentPerTeam = legFactor * (cleanTeams.length - 1);
     let extraPerTeam = targetPerTeam - currentPerTeam;
@@ -242,7 +226,7 @@ function buildGroupFixtures(groups, leg = "double") {
     }
 
     if (extraPerTeam > 0) {
-      const roundOffset = leg === "double" ? maxRound * 2 : maxRound;
+      const roundOffset = maxRound * legFactor;
       const extra = generateBalancedExtra(cleanTeams, extraPerTeam, base.length, label, roundOffset);
       fixtures[label] = [...base, ...extra];
     } else {
@@ -280,7 +264,7 @@ export function generateAuctionSetup({
   const mysteryCurrent = mysteryEnabled ? rerollMysteryCandidates(mysteryPools, {}) : {};
 
   const groups = groupsEnabled ? assignGroups(sequence, groupCount) : {};
-  const fixtures = groupsEnabled ? buildGroupFixtures(groups, fixtureLeg === "single" ? "single" : "double") : {};
+  const fixtures = groupsEnabled ? buildGroupFixtures(groups, normalizeFixtureLeg(fixtureLeg, "double")) : {};
 
   return {
     lotOrder,

@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React from "react";
 import { Toast } from "../components/Toast.jsx";
 import { PlayerRow } from "../components/PlayerRow.jsx";
 import { loadPlayersFromCsv } from "../data/csvPlayerLoader.js";
@@ -8,31 +8,21 @@ import { SquadAnalyser } from "../widgets/SquadAnalyser.jsx";
 import { BTN } from "../utils/styles.js";
 import { sfx } from "../utils/sfx.js";
 import { PCOLORS, POS_GROUPS, getPosGroup, TIERS, SQUAD_MAX, LOTS, MYSTERY_CARD_PRICE, getTierData, getTierKey } from "../game/constants.js";
-import { apiAbandonSession, apiGetSession, apiGetSessionBackup, apiOpenTransferMarket, apiUpdateSession, apiReadmitPlayer } from "../lib/api.js";
-import { subscribeToSessionStream } from "../lib/realtime.js";
-import { rotateArray } from "../utils/random.js";
+import { apiGetSessionBackup, apiOpenTransferMarket, apiReadmitPlayer } from "../lib/api.js";
+import { acceptSessionSnapshot, getPendingSessionAction, submitSessionAction, synchronizeSession } from "../lib/realtime.js";
+import { useSessionRealtime } from "../lib/useSessionRealtime.js";
+import { CountdownText, useDeadlinePassed } from "../components/Countdown.jsx";
 import { trackEvent } from "../lib/analytics.js";
 import { TeamBadge, StatusPill, getParticipantAccent } from "../theme/footballTheme.js";
+import { AuctionRoomMenu } from "../components/AuctionRoomMenu.jsx";
+import { ResponsiveAuctionPanel } from "../components/ResponsiveAuctionPanel.jsx";
+import "../styles/auction.css";
 
 function getPlayerAcquisitionPrice(player, tiers) {
   const explicitPrice = Number(player?.purchasePrice);
   if (Number.isFinite(explicitPrice)) return explicitPrice;
   if (player?.viaMystery) return MYSTERY_CARD_PRICE;
   return Number(getTierData(Number(player?.rating), tiers)?.price || 0);
-}
-
-function formatCountdown(ms) {
-  if (!Number.isFinite(ms)) return "";
-  if (ms <= 0) return "00:00:00:00";
-  const totalSeconds = Math.floor(ms / 1000);
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (days > 0) {
-    return `${String(days).padStart(2, "0")}:${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  }
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 export function BiddingScreen({ session: initSession, user, wishlists, onWishlist, onEnd, onAbandon }) {
@@ -57,16 +47,20 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [groupFilter, setGroupFilter] = React.useState("ALL");
   const [lotOpen, setLotOpen] = React.useState(Boolean(initSession.lotOpen));
   const [actionPending, setActionPending] = React.useState(false);
+  const [streamHealthy, setStreamHealthy] = React.useState(false);
   const [actionLabel, setActionLabel] = React.useState("");
   const [actionKind, setActionKind] = React.useState("idle");
-  const [showWaitingOverlayDebounced, setShowWaitingOverlayDebounced] = React.useState(false);
+  const [showPicked, setShowPicked] = React.useState(false);
+  const [panelTab, setPanelTab] = React.useState("teams");
+  const [panelOpen, setPanelOpen] = React.useState(false);
+  const [pendingAction, setPendingAction] = React.useState(null);
+  const [actionError, setActionError] = React.useState("");
+  const actionLockRef = React.useRef(false);
   const [roomCode, setRoomCode] = React.useState(initSession.roomCode || "");
   const [mysteryEnabled, setMysteryEnabled] = React.useState(Boolean(initSession.mysteryEnabled));
   const [mysteryCurrent, setMysteryCurrent] = React.useState(initSession.mysteryCurrent || {});
   const [mysteryUsed, setMysteryUsed] = React.useState(initSession.mysteryUsed || {});
   const [transferWindow, setTransferWindow] = React.useState(initSession.transferWindow || {});
-  const [soldPlayerIds, setSoldPlayerIds] = React.useState(Array.isArray(initSession?.soldPlayerIds) ? initSession.soldPlayerIds : []);
-  const [carriedBudgets, setCarriedBudgets] = React.useState(initSession.carriedBudgets || {});
   const [mysteryModalOpen, setMysteryModalOpen] = React.useState(false);
   const [mysteryScratchStarted, setMysteryScratchStarted] = React.useState(false);
   const [mysteryDisclaimerOpen, setMysteryDisclaimerOpen] = React.useState(false);
@@ -77,18 +71,13 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const [selectedSales, setSelectedSales] = React.useState(new Set());
   const [saleSubmitting, setSaleSubmitting] = React.useState(false);
   const [openingTransferMarket, setOpeningTransferMarket] = React.useState(false);
-  const [clockNow, setClockNow] = React.useState(Date.now());
   const lastPickEventRef = React.useRef(initSession.lastPickEvent?.id || null);
-  const syncNowRef = React.useRef(() => {});
-  const lastAutoSkippedRef = React.useRef(null);
-  const saveSessionRef = React.useRef(null);
-  // Tracks the last lotIdx for which we pushed a "malformed lots" fix to the server,
-  // preventing the fix itself from triggering an infinite save → sync → re-render loop.
-  const lotReassignedRef = React.useRef(-1);
+  const toastTimerRef = React.useRef(null);
 
 
   // Load face URL map from CSV so images show for all users regardless of what's in Firestore
   React.useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const csvPlayers = await loadPlayersFromCsv();
@@ -98,15 +87,10 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
           dataMap.set(p.id, p);
           if (p.playerFaceUrl) map.set(p.id, p.playerFaceUrl);
         });
-        setPlayerDataMap(dataMap);
-        setPlayerFaceMap(map);
+        if (!cancelled) { setPlayerDataMap(dataMap); setPlayerFaceMap(map); }
       } catch (_) {}
     })();
-  }, []);
-
-  React.useEffect(() => {
-    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
+    return () => { cancelled = true; clearTimeout(toastTimerRef.current); };
   }, []);
 
   const hydratePlayers = React.useCallback((players) => {
@@ -135,6 +119,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   React.useEffect(() => {
     if (playerDataMap.size === 0) return;
     setActivePlayers((prev) => hydratePlayers(prev));
+    setParticipants(prev => prev.map(p => ({ ...p, squad: hydratePlayers(p.squad), soldPlayers: hydratePlayers(p.soldPlayers) })));
   }, [playerDataMap, hydratePlayers]);
 
   const normalizeLotValue = (lot) => {
@@ -196,13 +181,8 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   const inTransferWindow = sessionStatus === "transfer";
   const transferDeadlineAt = Number(transferWindow?.listingDeadlineAt || 0);
   const transferDeadlineValid = Number.isFinite(transferDeadlineAt) && transferDeadlineAt > 0;
-  const transferDeadlineRemaining = transferDeadlineValid ? transferDeadlineAt - clockNow : null;
-  const transferDeadlinePassed = transferDeadlineValid && transferDeadlineRemaining <= 0;
-  const transferDeadlineText = transferDeadlineValid
-    ? transferDeadlineRemaining > 0
-      ? `Listing deadline in ${formatCountdown(transferDeadlineRemaining)}`
-      : "Listing deadline reached"
-    : "No listing deadline set";
+  const transferDeadlinePassed = useDeadlinePassed(transferDeadlineAt);
+  const transferDeadlineText = React.createElement(CountdownText, { deadlineAt: transferDeadlineAt });
   const transferSaleMin = Number(transferWindow?.requiredSalesMin || 2);
   const transferSaleMax = Number(transferWindow?.requiredSalesMax || 5);
   const myTransferCompleted = Array.isArray(transferWindow?.completedBy) && transferWindow.completedBy.includes(user.username);
@@ -247,17 +227,19 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
           next.add(id);
         }
       });
-      return next;
+      return next.size === prev.size && [...next].every(id => prev.has(id)) ? prev : next;
     });
   }, [myParticipant]);
 
   const showToast = (msg, color="#FFD700") => {
     setToast({ msg, color });
-    setTimeout(() => setToast(null), 2400);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 2400);
   };
 
   const beginActionLock = (label, kind = "generic") => {
-    if (actionPending) return false;
+    if (actionLockRef.current) return false;
+    actionLockRef.current = true;
     setActionPending(true);
     setActionLabel(label || "Syncing action…");
     setActionKind(kind);
@@ -265,426 +247,104 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   };
 
   const endActionLock = () => {
+    actionLockRef.current = false;
     setActionPending(false);
     setActionLabel("");
     setActionKind("idle");
   };
 
-  const saveSession = useCallback(async (
-    updatedParticipants,
-    newLotIdx,
-    newTurnIdx,
-    newPassed,
-    status = "active",
-    nextLotOpen = lotOpen,
-    nextLotClosing = lotClosing,
-    extras = {},
-    nextSequence = sequence,
-    nextLotOrder = lotOrder
-  ) => {
-    const base = baseSessionRef.current || initSession;
-    const updated = {
-      ...base,
-      participants: updatedParticipants,
-      lotIdx: newLotIdx,
-      turnIdx: newTurnIdx,
-      lotOpen: nextLotOpen,
-      lotClosing: nextLotClosing,
-      sequence: nextSequence,
-      lotOrder: nextLotOrder,
-      tiers: activeTiers,
-      passedThisLot: [...newPassed],
-      status,
-      mysteryUsed,
-      updatedAt: Date.now(),
-      ...extras,
-    };
-    setSessionStatus(updated.status || "active");
-    setTransferWindow(updated.transferWindow || {});
-    setSoldPlayerIds(Array.isArray(updated.soldPlayerIds) ? updated.soldPlayerIds : []);
-    setCarriedBudgets(updated.carriedBudgets || {});
-    try {
-      await apiUpdateSession(initSession.id, updated, user?.token);
-      baseSessionRef.current = updated;
-      syncNowRef.current?.();
-      return true;
-    } catch (err) {
-      console.warn("Session sync failed; background sync will retry.", err);
-      return false;
+  const applyLatest = (latest) => {
+    if (!latest || Number(latest.revision || 0) < Number(baseSessionRef.current.revision || 0)) return;
+    const previous = baseSessionRef.current;
+    baseSessionRef.current = latest;
+    if (latest.participants !== previous.participants) {
+      setParticipants(current => (latest.participants || []).map(p => previous.participants.includes(p)
+        ? current.find(existing => existing.name === p.name) || p
+        : { ...p, squad: hydratePlayers(p.squad), soldPlayers: hydratePlayers(p.soldPlayers) }));
     }
-  }, [initSession, lotOpen, lotClosing, user?.token, sequence, lotOrder, activePlayers, activeTiers, mysteryUsed]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    let timerId = null;
-    let failCount = 0;
-    const BASE_POLL_MS = 15000;       // increased: real-time updates come via Socket.IO
-    const HIDDEN_POLL_MS = 60000;     // tab is backgrounded — no need to hammer the server
-    const BACKOFF_MS = [5000, 10000, 20000];
-    let lastReconnectSyncAt = 0;       // debounce reconnect-triggered syncs
-
-    const applyLatest = (latest) => {
-      if (!latest || cancelled) return;
-
-      baseSessionRef.current = latest;
-
-      setParticipants(latest.participants || []);
-      setSessionStatus(latest.status || "active");
-      setLotIdx(latest.lotIdx || 0);
-      setTurnIdx(latest.turnIdx || 0);
-      setPassedThisLot(new Set(latest.passedThisLot || []));
-      setLotOpen(Boolean(latest.lotOpen));
-      setLotClosing(Boolean(latest.lotClosing));
-      setSequence(Array.isArray(latest.sequence) ? latest.sequence : []);
-      setLotOrder(Array.isArray(latest.lotOrder) && latest.lotOrder.length > 0 ? latest.lotOrder : [1, 2, 3, 4, 5, 6]);
+    setSessionStatus(latest.status || "active");
+    setLotIdx(latest.lotIdx || 0);
+    setTurnIdx(latest.turnIdx || 0);
+    if (latest.passedThisLot !== previous.passedThisLot) setPassedThisLot(new Set(latest.passedThisLot || []));
+    setLotOpen(Boolean(latest.lotOpen));
+    setLotClosing(Boolean(latest.lotClosing));
+    setSequence(latest.sequence || []);
+    setLotOrder(latest.lotOrder || []);
+    if (latest.shuffledPlayers !== previous.shuffledPlayers || latest.playerPool !== previous.playerPool) {
       setActivePlayers(normalizePlayersLot(hydratePlayers(latest.shuffledPlayers || latest.playerPool || [])));
-      setActiveTiers(latest.tiers || TIERS);
-      setRoomCode(latest.roomCode || "");
-      setMysteryEnabled(Boolean(latest.mysteryEnabled));
-      setMysteryCurrent(latest.mysteryCurrent || {});
-      setMysteryUsed(latest.mysteryUsed || {});
-      setTransferWindow(latest.transferWindow || {});
-      setSoldPlayerIds(Array.isArray(latest.soldPlayerIds) ? latest.soldPlayerIds : []);
-      setCarriedBudgets(latest.carriedBudgets || {});
-      setAbandonedBy(Array.isArray(latest.abandonedBy) ? latest.abandonedBy : []);
-
-      const latestPickEventId = latest.lastPickEvent?.id || null;
-      if (latestPickEventId && latestPickEventId !== lastPickEventRef.current) {
-        lastPickEventRef.current = latestPickEventId;
-        if (latest.lastPickEvent?.picker && latest.lastPickEvent?.playerName) {
-          if (latest.lastPickEvent?.viaMystery) {
-            showToast(`🎴 ${latest.lastPickEvent.picker} revealed ${latest.lastPickEvent.playerName} via Mystery Card!`, "#FFD700");
-          } else {
-            showToast(`⚽ ${latest.lastPickEvent.picker} picked ${latest.lastPickEvent.playerName}!`, "#00FF88");
-          }
-        }
-      }
-
-      if (latest.status === "complete") {
-        onEnd(latest.participants || []);
-      }
-      if (latest.status === "cancelled") {
-        showToast("Game was cancelled by host", "#FF3D71");
-        onAbandon();
-      }
-    };
-
-    const schedule = (ms) => {
-      if (cancelled) return;
-      const jitter = Math.floor(Math.random() * 161) - 80;
-      timerId = setTimeout(() => {
-        syncSession(false);
-      }, Math.max(350, ms + jitter));
-    };
-
-    const syncSession = async (force = false) => {
-      if (cancelled) return;
-      if (!force && typeof document !== "undefined" && document.hidden) {
-        schedule(HIDDEN_POLL_MS);
-        return;
-      }
-
-      let latest = null;
-      try {
-        latest = await apiGetSession(initSession.id, user?.token);
-      } catch (err) {
-        const msg = String(err?.message || "").toLowerCase();
-        if (msg.includes("404") || msg.includes("not found")) {
-          if (cancelled) return;
-          // Retry once after 5 seconds — handles transient server blips where the session
-          // exists but briefly returned 404. If it still fails, treat as game ended.
-          showToast("⚠️ Connection lost, retrying…", "#FF6B35");
-          setTimeout(async () => {
-            if (cancelled) return;
-            try {
-              const retry = await apiGetSession(initSession.id, user?.token);
-              if (retry && !cancelled) {
-                failCount = 0;
-                applyLatest(retry);
-                schedule(BASE_POLL_MS);
-              } else if (!cancelled) {
-                showToast("Game has ended", "#FF3D71");
-                onAbandon();
-              }
-            } catch (_) {
-              if (!cancelled) {
-                showToast("Game has ended", "#FF3D71");
-                onAbandon();
-              }
-            }
-          }, 5000);
-          return;
-        }
-        failCount = Math.min(failCount + 1, BACKOFF_MS.length);
-        schedule(BACKOFF_MS[failCount - 1] || 5000);
-        return;
-      }
-      if (cancelled || !latest) return;
-      failCount = 0;
-      applyLatest(latest);
-
-      schedule(BASE_POLL_MS);
-    };
-
-    syncNowRef.current = () => {
-      failCount = 0;
-      if (timerId) clearTimeout(timerId);
-      syncSession(true);
-    };
-
-    const onFocus = () => syncNowRef.current?.();
-    const onVisibility = () => {
-      if (typeof document !== "undefined" && !document.hidden) {
-        syncNowRef.current?.();
-      }
-    };
-
-    if (typeof window !== "undefined") {
-      window.addEventListener("focus", onFocus);
     }
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", onVisibility);
+    setActiveTiers(latest.tiers || TIERS);
+    setRoomCode(latest.roomCode || "");
+    setMysteryEnabled(Boolean(latest.mysteryEnabled));
+    setMysteryCurrent(latest.mysteryCurrent || {});
+    setMysteryUsed(latest.mysteryUsed || {});
+    setTransferWindow(latest.transferWindow || {});
+    setAbandonedBy(latest.abandonedBy || []);
+    const pick = latest.lastPickEvent;
+    if (pick?.id && pick.id !== lastPickEventRef.current) {
+      lastPickEventRef.current = pick.id;
+      // Picks already update the rows, budgets and activity panel; no repeated room-wide toast.
     }
+  };
+  useSessionRealtime(initSession.id, user, {
+    onUpdate: applyLatest,
+    onStatus: setStreamHealthy,
+    onPending: command => { setPendingAction(command); if (!command) setActionError(""); },
+    onClosed: (latest, reason) => {
+      if (reason === "complete") {
+        const hydrated = (latest?.participants || []).map(p => ({ ...p, squad: hydratePlayers(p.squad), soldPlayers: hydratePlayers(p.soldPlayers) }));
+        onEnd(hydrated, latest);
+      } else onAbandon();
+    },
+    onError: error => { if (error.status === 403 || error.status === 404) showToast(error.message, "#FF6B35"); },
+  });
 
-    const unsubscribeStream = subscribeToSessionStream(initSession.id, {
-      onUpdate: (next) => {
-        failCount = 0;
-        applyLatest(next);
-      },
-      onClosed: (next, reason) => {
-        if (reason === "complete") {
-          onEnd(next?.participants || baseSessionRef.current?.participants || []);
-          return;
-        }
-        showToast("Game was cancelled by host", "#FF3D71");
-        onAbandon();
-      },
-      onReconnect: () => {
-        // Debounce: a burst of rapid reconnects (e.g. flaky connection) must not flood the
-        // server with simultaneous GET /sessions requests. Allow at most one triggered sync
-        // per 15 seconds; the regular poll will catch up for anything that falls within the gap.
-        const now = Date.now();
-        if (now - lastReconnectSyncAt < 15000) return;
-        lastReconnectSyncAt = now;
-        syncNowRef.current?.();
-      },
-    }, user.username);
-
-    syncSession(true);
-
-    return () => {
-      cancelled = true;
-      unsubscribeStream();
-      if (timerId) clearTimeout(timerId);
-      if (typeof window !== "undefined") {
-        window.removeEventListener("focus", onFocus);
-      }
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", onVisibility);
-      }
-    };
-  }, [initSession.id, onEnd, onAbandon, hydratePlayers, user.username, user?.token]);
-
-  // Always keep saveSessionRef pointing at the latest saveSession closure
-  React.useEffect(() => { saveSessionRef.current = saveSession; });
-
-  // Auto-skip any picker who cannot afford any available player or whose squad is full
-  React.useEffect(() => {
-    if (!lotOpen || lotClosing || !currentPickerKey || actionPending) return;
-
-    // If this lot has no active target players (invalid assignment), and game still live,
-    // recover once per lot — the ref guard prevents the fix itself from creating an infinite
-    // save → sync → re-render loop that floods the server with PUT requests.
-    if (lotPlayers.length === 0 && activePlayers.length > 0) {
-      if (lotReassignedRef.current === lotIdx) return; // already attempted for this lot
-      lotReassignedRef.current = lotIdx;
-      showToast("⚠️ Lots look malformed; reassigning players into lots to continue", "#FFAA00");
-      const reassigned = normalizePlayersLot(activePlayers);
-      setActivePlayers(reassigned);
-      if (isHost) {
-        saveSessionRef.current?.(participants, lotIdx, turnIdx, passedThisLot, "active", lotOpen, lotClosing, {
-          playerPool: reassigned,
-          shuffledPlayers: reassigned,
-        }, sequence, lotOrder);
-      }
-      return;
-    }
-
-    const skipKey = `${lotIdx}-${currentPickerKey}`;
-    if (lastAutoSkippedRef.current === skipKey) return;
-
-    const part = currentParticipant;
-    if (!part) return;
-
-    const squadFull = part.squad.length >= SQUAD_MAX;
-    const canAfford = availablePlayers.some(p => {
-      const price = Number(getTierData(p.rating, activeTiers)?.price || 0);
-      return part.budget >= price;
-    });
-
-    if (!squadFull && canAfford) return; // eligible — normal turn
-
-    lastAutoSkippedRef.current = skipKey;
-    showToast(`⏭️ ${part.name} auto-skipped (no affordable players)`, "#888");
-    const newPassed = new Set([...passedThisLot, currentPickerKey]);
-    setPassedThisLot(newPassed);
-    const active = sequence.filter(n => !newPassed.has(n));
-
-    if (active.length === 0 || availablePlayers.length === 0) {
-      setLotOpen(false);
-      setLotClosing(true);
-      if (isHost) {
-        saveSessionRef.current?.(participants, lotIdx, 0, newPassed, "active", false, true, {}, sequence, lotOrder);
-      }
-      return;
-    }
-
-    const newTurnIdx = turnIdx % active.length;
-    setTurnIdx(newTurnIdx);
-    if (isHost) {
-      saveSessionRef.current?.(participants, lotIdx, newTurnIdx, newPassed, "active", true, false, {}, sequence, lotOrder);
-    }
-  }, [lotOpen, lotClosing, currentPickerKey, lotIdx, lotPlayers, activePlayers, currentParticipant, passedThisLot, participants, turnIdx, sequence, lotOrder, activeTiers, actionPending]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const closeLot = () => setLotClosing(true);
+  const runAction = async (command, label, kind = "generic") => {
+    if (!beginActionLock(label, kind)) return false;
+    setActionError("");
+    try {
+      await submitSessionAction(initSession.id, command, user.token, Number(baseSessionRef.current.revision || 0));
+      return true;
+    } catch (error) {
+      const unknown = getPendingSessionAction(initSession.id);
+      setActionError(unknown ? "Still checking your last action. Your budget and squad have not been changed locally."
+        : error.code === "STALE_REVISION" ? "The room updated. Your view is refreshing—please choose again."
+        : `Action not accepted: ${error.message}`);
+      return false;
+    } finally { endActionLock(); }
+  };
 
   const handleOpenLot = async () => {
     if (!isHost) return;
-    if (!beginActionLock("Opening lot…", "open")) return;
-    sfx("open");
-    try {
-      setLotOpen(true);
-      setLotClosing(false);
-      await saveSession(participants, lotIdx, turnIdx, passedThisLot, "active", true, false);
+    if (await runAction({ type: "open-lot" }, "Opening lot…", "open")) {
+      sfx("open");
       trackEvent("lot_opened", { lotNum: currentLotNum, lotIdx });
-      showToast(`🔓 Lot ${currentLotNum} is now open!`, "#FFD700");
-    } finally {
-      endActionLock();
     }
   };
 
   const handlePick = async (player) => {
-    if (!userCanAct) return;
-    if (!currentParticipant || !lotOpen) return;
-    const part = currentParticipant;
-    if (!part) return;
-    const td = getTierData(player.rating, activeTiers);
-    if (part.budget < td.price) { showToast("❌ Not enough budget!", "#FF3D71"); return; }
-    if (part.squad.length >= SQUAD_MAX) { showToast("❌ Squad full (max 16)!", "#FF3D71"); return; }
-    if (!beginActionLock(`Registering pick: ${player.name}`, "pick")) return;
-
-    sfx("pick");
-    trackEvent("player_picked", { lotNum: currentLotNum, price: td.price, tier: getTierKey(player.rating, activeTiers) });
-
-    const pickedAt = Date.now();
-    const pickedPlayer = { ...player, pickedAt, purchasePrice: td.price };
-
-    const updatedParticipants = participants.map(x => x.name === part.name
-      ? { ...x, budget: x.budget - td.price, squad: [...x.squad, pickedPlayer] }
-      : x
-    );
-    setParticipants(updatedParticipants);
-    showToast(`⚽ ${part.name} picks ${player.name}!`, "#00FF88");
-
-    const newPassed = new Set(passedThisLot);
-    const active = sequence.filter(n => !newPassed.has(n));
-    const newAvail = availablePlayers.filter(p => p.id !== player.id);
-    const newTurnIdx = active.length > 0 ? (turnIdx + 1) % active.length : 0;
-    const pickEvent = {
-      id: `${pickedAt}-${player.id}`,
-      picker: part.name,
-      playerId: player.id,
-      playerName: player.name,
-      at: pickedAt,
-    };
-    lastPickEventRef.current = pickEvent.id;
-
-    try {
-      if (active.length === 0 || newAvail.length === 0) {
-        setTurnIdx(0);
-        setLotOpen(false);
-        setLotClosing(true);
-        await saveSession(updatedParticipants, lotIdx, 0, newPassed, "active", false, true, {
-          lastPickEvent: pickEvent,
-        });
-        setTimeout(closeLot, 300);
-        return;
-      }
-      setTurnIdx(newTurnIdx);
-      await saveSession(updatedParticipants, lotIdx, newTurnIdx, newPassed, "active", lotOpen, lotClosing, {
-        lastPickEvent: pickEvent,
-      });
-    } finally {
-      endActionLock();
+    if (!userCanAct || !lotOpen) return;
+    if (await runAction({ type: "pick", playerId: player.id }, `Registering pick: ${player.name}`, "pick")) {
+      sfx("pick");
+      trackEvent("player_picked", { lotNum: currentLotNum, tier: getTierKey(player.rating, activeTiers) });
     }
   };
 
   // Shows the disclaimer first; then the scratch-card modal after the user accepts.
   const handleOpenMysteryCard = () => {
-    if (!mysteryAvailable || actionPending) return;
+    if (!mysteryAvailable || actionBusy) return;
     sfx("open");
     setMysteryScratchStarted(false);
     setMysteryDisclaimerOpen(true);
   };
 
   const handleConfirmMysteryReveal = async () => {
-    if (!myParticipant || !myMysteryCandidate) { setMysteryModalOpen(false); setMysteryScratchStarted(false); return; }
-    // Only block if the card was already used — don't re-check mysteryAvailable here because
-    // a sync arriving mid-scratch could flip userCanAct and silently cancel a committed reveal.
-    if (myMysteryUsed) { setMysteryModalOpen(false); setMysteryScratchStarted(false); return; }
-    if (!beginActionLock(`Revealing Mystery Card: ${myMysteryCandidate.name}`, "mystery")) return;
-
-    sfx("pick");
-    trackEvent("mystery_card_used", { lotIdx });
-    const revealedPlayer = { ...myMysteryCandidate, viaMystery: true, purchasePrice: MYSTERY_CARD_PRICE };
-
-    const updatedParticipants = participants.map((x) => x.name === myParticipant.name
-      ? { ...x, budget: x.budget - MYSTERY_CARD_PRICE, squad: [...x.squad, revealedPlayer] }
-      : x
-    );
-    const newMysteryUsed = { ...mysteryUsed, [user.username]: true };
-
-    setParticipants(updatedParticipants);
-    setMysteryUsed(newMysteryUsed);
-    showToast(`🎴 ${myParticipant.name} scratched the Mystery Card and revealed ${revealedPlayer.name}!`, "#FFD700");
-
-    const pickEvent = {
-      id: `mystery-${Date.now()}-${revealedPlayer.id}`,
-      picker: myParticipant.name,
-      playerId: revealedPlayer.id,
-      playerName: revealedPlayer.name,
-      viaMystery: true,
-      at: Date.now(),
-    };
-    lastPickEventRef.current = pickEvent.id;
-
-    const newPassed = new Set(passedThisLot);
-    const active = sequence.filter((n) => !newPassed.has(n));
-    const newTurnIdx = active.length > 0 ? (turnIdx + 1) % active.length : 0;
-
-    try {
-      if (active.length === 0 || availablePlayers.length === 0) {
-        setTurnIdx(0);
-        setLotOpen(false);
-        setLotClosing(true);
-        await saveSession(updatedParticipants, lotIdx, 0, newPassed, "active", false, true, {
-          mysteryUsed: newMysteryUsed,
-          lastPickEvent: pickEvent,
-        }, sequence, lotOrder);
-        setTimeout(closeLot, 300);
-      } else {
-        setTurnIdx(newTurnIdx);
-        await saveSession(updatedParticipants, lotIdx, newTurnIdx, newPassed, "active", lotOpen, lotClosing, {
-          mysteryUsed: newMysteryUsed,
-          lastPickEvent: pickEvent,
-        }, sequence, lotOrder);
-      }
-      setMysteryModalOpen(false);
-      setMysteryScratchStarted(false);
-      syncNowRef.current?.();
-    } finally {
-      endActionLock();
-    }
+    if (myMysteryUsed) return;
+    const accepted = await runAction({ type: "mystery" }, "Revealing Mystery Card…", "mystery");
+    if (accepted) { sfx("pick"); trackEvent("mystery_card_used", { lotIdx }); }
+    // A rejection/unknown outcome must not trap the user in a non-closeable scratched modal.
+    setMysteryModalOpen(false);
+    setMysteryScratchStarted(false);
   };
 
   const handleDownloadBackup = async () => {
@@ -710,7 +370,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   };
 
   const toggleSaleSelection = (playerId) => {
-    if (!myParticipant || myTransferCompleted || saleSubmitting || transferDeadlinePassed) return;
+    if (!myParticipant || myTransferCompleted || saleSubmitting || transferDeadlinePassed || actionBusy) return;
     setSelectedSales((prev) => {
       const next = new Set(prev);
       if (next.has(playerId)) {
@@ -724,7 +384,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   };
 
   const handleSubmitSales = async () => {
-    if (!myParticipant || myTransferCompleted || saleSubmitting) return;
+    if (!myParticipant || myTransferCompleted || saleSubmitting || actionBusy) return;
     if (transferDeadlinePassed) {
       showToast("⏰ Transfer listing deadline has passed", "#FFB84D");
       return;
@@ -736,58 +396,17 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
     setSaleSubmitting(true);
     try {
-      const selectedIds = new Set(selectedSalePlayers.map((player) => player.id));
-      const soldEntries = selectedSalePlayers.map((player) => ({
-        ...player,
-        soldInTransferWindow: true,
-        soldAt: Date.now(),
-        salePrice: getPlayerAcquisitionPrice(player, activeTiers),
-      }));
-      const nextParticipants = participants.map((participant) => {
-        if (participant.name !== myParticipant.name) return participant;
-        const baseBudget = Number(participant.budget || 0);
-        return {
-          ...participant,
-          budget: baseBudget + selectedSaleBudgetGain,
-          squad: participant.squad.filter((player) => !selectedIds.has(player.id)),
-          soldPlayers: [...(participant.soldPlayers || []), ...soldEntries],
-        };
-      });
-      const nextTransferWindow = {
-        ...transferWindow,
-        phase: "selling",
-        completedBy: Array.from(new Set([...(transferWindow.completedBy || []), myParticipant.name])),
-      };
-      const nextSoldIds = Array.from(new Set([
-        ...soldPlayerIds,
-        ...selectedSalePlayers.map((player) => player.id),
-      ]));
-      const nextCarriedBudgets = {
-        ...carriedBudgets,
-        [myParticipant.name]: Number.isFinite(Number(carriedBudgets?.[myParticipant.name]))
-          ? Number(carriedBudgets[myParticipant.name])
-          : Number(myParticipant.budget || 0),
-      };
-
-      setParticipants(nextParticipants);
-      setSelectedSales(new Set());
-      await saveSession(nextParticipants, 0, 0, new Set(), "transfer", false, false, {
-        transferWindow: nextTransferWindow,
-        soldPlayerIds: nextSoldIds,
-        carriedBudgets: nextCarriedBudgets,
-        expectedBudgets: Object.fromEntries(nextParticipants.map((participant) => [
-          participant.name,
-          Number(participant?.budget || 0),
-        ])),
-      }, [], []);
-      showToast("Transfer listings submitted", "#00FF88");
+      if (await runAction({ type: "transfer-list", playerIds: selectedSalePlayers.map(p => p.id) }, "Submitting transfer listings…")) {
+        setSelectedSales(new Set());
+        showToast("Transfer listings submitted", "#00FF88");
+      }
     } finally {
       setSaleSubmitting(false);
     }
   };
 
   const handleOpenTransferMarket = async () => {
-    if (!isHost || !initSession?.id || openingTransferMarket) return;
+    if (!isHost || !initSession?.id || openingTransferMarket || actionBusy) return;
     if (!everyoneCompletedTransferSales) {
       showToast(`Wait until every participant submits ${transferSaleMin}-${transferSaleMax} listings`, "#FFB84D");
       return;
@@ -799,22 +418,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     setOpeningTransferMarket(true);
     try {
       const latest = await apiOpenTransferMarket(initSession.id, user?.token);
-      baseSessionRef.current = latest;
-      setParticipants(latest.participants || []);
-      setSessionStatus(latest.status || "active");
-      setTransferWindow(latest.transferWindow || {});
-      setLotIdx(latest.lotIdx || 0);
-      setTurnIdx(latest.turnIdx || 0);
-      setPassedThisLot(new Set(latest.passedThisLot || []));
-      setLotOrder(Array.isArray(latest.lotOrder) && latest.lotOrder.length > 0 ? latest.lotOrder : [1, 2, 3, 4, 5, 6]);
-      setSequence(Array.isArray(latest.sequence) ? latest.sequence : []);
-      setActivePlayers(normalizePlayersLot(hydratePlayers(latest.shuffledPlayers || latest.playerPool || [])));
-      setLotOpen(Boolean(latest.lotOpen));
-      setLotClosing(Boolean(latest.lotClosing));
-      setMysteryCurrent(latest.mysteryCurrent || {});
-      setMysteryUsed(latest.mysteryUsed || {});
-      setSoldPlayerIds(Array.isArray(latest.soldPlayerIds) ? latest.soldPlayerIds : []);
-      setCarriedBudgets(latest.carriedBudgets || {});
+      acceptSessionSnapshot(initSession.id, latest);
       showToast("Transfer market is ready", "#4FC3F7");
     } catch (err) {
       showToast(`Failed to open market: ${err.message}`, "#FF6B35");
@@ -824,9 +428,6 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   };
 
   const handleAbandonClick = async () => {
-    try {
-      await apiAbandonSession(initSession.id, user?.token);
-    } catch (_err) {}
     onAbandon();
   };
 
@@ -834,9 +435,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     if (!roomCode || !username || readmitPending) return;
     setReadmitPending(true);
     try {
-      await apiReadmitPlayer(roomCode, username, user?.token);
+      const latest = await apiReadmitPlayer(roomCode, username, user?.token);
+      acceptSessionSnapshot(initSession.id, latest);
       showToast(`✅ ${username} has been re-admitted`, "#00FF88");
-      syncNowRef.current?.();
     } catch (err) {
       showToast(`Failed to readmit: ${err.message}`, "#FF3D71");
     } finally {
@@ -846,86 +447,18 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handlePass = async () => {
     if (!userCanAct) return;
-    if (!currentPickerKey) return;
-    if (!beginActionLock("Registering pass…", "pass")) return;
-    sfx("pass");
-    trackEvent("bid_passed", { lotIdx });
-    const newPassed = new Set([...passedThisLot, currentPickerKey]);
-    setPassedThisLot(newPassed);
-    showToast(`${currentPickerName} is done for this lot`, "#888");
-    const active = sequence.filter(n => !newPassed.has(n));
-    try {
-      if (active.length === 0 || availablePlayers.length === 0) {
-        setLotOpen(false);
-        setLotClosing(true);
-        await saveSession(participants, lotIdx, turnIdx, newPassed, "active", false, true);
-        closeLot();
-        return;
-      }
-      const newTurnIdx = turnIdx % active.length;
-      setTurnIdx(newTurnIdx);
-      await saveSession(participants, lotIdx, newTurnIdx, newPassed);
-    } finally {
-      endActionLock();
-    }
+    if (await runAction({ type: "pass" }, "Registering pass…", "pass")) { sfx("pass"); trackEvent("bid_passed", { lotIdx }); }
   };
 
   // Host-only: force-skip the current picker when they're absent or unresponsive.
   const handleHostForceSkip = async () => {
     if (!isHost || !currentPickerKey || !lotOpen || lotClosing) return;
-    if (!beginActionLock(`Skipping ${currentPickerName}…`, "pass")) return;
-    sfx("pass");
-    trackEvent("host_force_skip", { skipped: currentPickerKey, lotIdx });
-    const newPassed = new Set([...passedThisLot, currentPickerKey]);
-    setPassedThisLot(newPassed);
-    showToast(`⏭️ Host skipped ${currentPickerName}`, "#FF6B35");
-    const active = sequence.filter((n) => !newPassed.has(n));
-    try {
-      if (active.length === 0 || availablePlayers.length === 0) {
-        setLotOpen(false);
-        setLotClosing(true);
-        await saveSession(participants, lotIdx, 0, newPassed, "active", false, true);
-        closeLot();
-        return;
-      }
-      const newTurnIdx = turnIdx % active.length;
-      setTurnIdx(newTurnIdx);
-      await saveSession(participants, lotIdx, newTurnIdx, newPassed);
-    } finally {
-      endActionLock();
-    }
+    if (await runAction({ type: "force-skip" }, `Skipping ${currentPickerName}…`, "pass")) { sfx("pass"); trackEvent("host_force_skip", { skipped: currentPickerKey, lotIdx }); }
   };
 
   const handleNextLot = async () => {
     if (!isHost) return;
-    if (!beginActionLock("Opening next lot…", "next-lot")) return;
-    const rotated = rotateArray(sequence, 1);
-    try {
-      if (lotIdx + 1 >= lotOrder.length) {
-        trackEvent("auction_finalized", { lotCount: lotOrder.length });
-        await saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
-        onEnd(participants);
-      } else {
-        sfx("open");
-        const newLotIdx = lotIdx + 1;
-        trackEvent("lot_advanced", { newLotIdx });
-        setLotIdx(newLotIdx);
-        setSequence(rotated);
-        setPassedThisLot(new Set());
-        setTurnIdx(0);
-        setLotClosing(false);
-        setLotOpen(false);
-        setSearch("");
-        setGroupFilter("ALL");
-        lotReassignedRef.current = -1; // allow malformed-lot recovery on the new lot if needed
-        // The backend owns Mystery Card pools and recomputes mysteryCurrent itself whenever
-        // lotIdx changes — the client never has the pool data needed to do this anymore, so we
-        // just let the server-side reroll happen and pick up the result on the next sync.
-        await saveSession(participants, newLotIdx, 0, new Set(), "active", false, false, {}, rotated, lotOrder);
-      }
-    } finally {
-      endActionLock();
-    }
+    if (await runAction({ type: "next-lot" }, "Opening next lot…", "next-lot")) { setSearch(""); setGroupFilter("ALL"); }
   };
 
   const displayGroups = groupFilter === "ALL" ? Object.keys(POS_GROUPS) : [groupFilter];
@@ -935,8 +468,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
   );
 
   const isAtCap = currentParticipant && currentParticipant.squad.length >= SQUAD_MAX;
-  const showSelfPickLoader = Boolean(userCanAct && actionPending && actionKind === "pick");
-  const showWaitingOverlay = Boolean(lotOpen && !lotClosing && currentPickerName && !userCanAct);
+  const actionBusy = actionPending || Boolean(pendingAction);
   const recentPicks = participants
     .flatMap(p => p.squad.map(pl => ({ ...pl, owner:p.name, ownerIdx:participants.findIndex(x=>x.name===p.name) })))
     .sort((a, b) => {
@@ -947,18 +479,6 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       return bRecent - aRecent;
     })
     .slice(0, 6);
-
-  React.useEffect(() => {
-    let timerId = null;
-    if (showWaitingOverlay) {
-      timerId = setTimeout(() => setShowWaitingOverlayDebounced(true), 250);
-    } else {
-      setShowWaitingOverlayDebounced(false);
-    }
-    return () => {
-      if (timerId) clearTimeout(timerId);
-    };
-  }, [showWaitingOverlay]);
 
   // Check whether any participant can still buy in any future lot.
   // Future-lot players are intentionally stripped from the client payload by the server (fairness),
@@ -975,15 +495,19 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
 
   const handleEndGame = async () => {
     if (!isHost) return;
-    if (!beginActionLock("Ending game…", "end-game")) return;
-    const rotated = rotateArray(sequence, 1);
-    try {
-      await saveSession(participants, lotIdx, 0, new Set(), "complete", false, false, {}, rotated, lotOrder);
-      onEnd(participants);
-    } finally {
-      endActionLock();
-    }
+    await runAction({ type: "end" }, "Ending game…", "end-game");
   };
+
+  const actionFeedback = (actionPending || pendingAction || actionError) && React.createElement("div", {
+    className: "auction-action-feedback", role: "status", "aria-live": "polite",
+  },
+    React.createElement("p", null, actionPending ? actionLabel : pendingAction ? "Still checking your last action. Please resolve it before choosing again." : actionError),
+    !actionPending && pendingAction && React.createElement(React.Fragment, null,
+      React.createElement("button", { type: "button", onClick: () => synchronizeSession(initSession.id) }, "Check status"),
+      React.createElement("button", { type: "button", onClick: () => runAction(pendingAction, "Checking your previous action…", "retry") }, "Retry pending action")
+    ),
+    !actionPending && !pendingAction && React.createElement("button", { type: "button", onClick: () => setActionError("") }, "Dismiss")
+  );
 
   if (inTransferWindow) {
     const unsoldCarryCount = Number(transferWindow?.unsoldCarryCount || 0);
@@ -999,6 +523,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       style: { minHeight: "100vh", background: "#04060a", color: "#fff", padding: 24 }
     },
       toast && React.createElement(Toast, toast),
+      actionFeedback,
       React.createElement("div", { style: { maxWidth: 1200, margin: "0 auto" } },
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, marginBottom: 24, flexWrap: "wrap" } },
           React.createElement("div", null,
@@ -1025,7 +550,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
             }, isHost ? "CANCEL GAME" : "ABANDON")
           )
         ),
-        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18, alignItems: "start" } },
+        React.createElement("div", { className: "auction-transfer-grid" },
           React.createElement("div", { style: { background: "#0a0c12", border: "1px solid #1e2230", borderRadius: 16, padding: 18 } },
             React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 } },
               participants.map((participant, idx) => {
@@ -1067,7 +592,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                 ),
                 !myTransferCompleted && React.createElement("button", {
                   onClick: handleSubmitSales,
-                  disabled: saleSubmitting || transferDeadlinePassed || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax,
+                  disabled: actionBusy || saleSubmitting || transferDeadlinePassed || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax,
                   style: { ...BTN.gold, opacity: saleSubmitting || transferDeadlinePassed || selectedSalePlayers.length < transferSaleMin || selectedSalePlayers.length > transferSaleMax ? 0.6 : 1 }
                 }, saleSubmitting ? "SUBMITTING…" : `SUBMIT ${selectedSalePlayers.length} LISTINGS`)
               ),
@@ -1097,7 +622,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                       ),
                       React.createElement("button", {
                         onClick: () => toggleSaleSelection(player.id),
-                        disabled: myTransferCompleted || saleSubmitting || transferDeadlinePassed || (!selected && selectedSales.size >= transferSaleMax),
+                        disabled: actionBusy || myTransferCompleted || saleSubmitting || transferDeadlinePassed || (!selected && selectedSales.size >= transferSaleMax),
                         style: selected
                           ? { ...BTN.gold, padding: "8px 14px", fontSize: 12 }
                           : { ...BTN.ghost, padding: "8px 14px", fontSize: 12, color: "#FF6B35", borderColor: "#FF6B3544" }
@@ -1139,7 +664,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                 : `Wait until every participant submits ${transferSaleMin}-${transferSaleMax} listings before opening the transfer market.`),
               React.createElement("button", {
               onClick: handleOpenTransferMarket,
-              disabled: !everyoneCompletedTransferSales || openingTransferMarket || !canOpenTransferMarketNow,
+              disabled: actionBusy || !everyoneCompletedTransferSales || openingTransferMarket || !canOpenTransferMarketNow,
               style: { ...BTN.gold, width: "100%", opacity: !everyoneCompletedTransferSales || openingTransferMarket || !canOpenTransferMarketNow ? 0.6 : 1 }
               }, openingTransferMarket ? "OPENING MARKET…" : !everyoneCompletedTransferSales ? "WAIT FOR LISTINGS" : "OPEN TRANSFER MARKET")
             )
@@ -1149,7 +674,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
     );
   }
 
-  return React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 272px", height:"100vh", background:"transparent", overflow:"hidden" } },
+  return React.createElement("div", { className: "auction-room" },
     toast && React.createElement(Toast, toast),
     React.createElement(SquadAnalyser, {
       participants,
@@ -1261,171 +786,33 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
         setMysteryScratchStarted(false);
       },
     }),
-    showWaitingOverlayDebounced && React.createElement("div", {
-      style:{
-        position:"fixed",
-        inset:0,
-        background:"#00000066",
-        display:"flex",
-        alignItems:"center",
-        justifyContent:"center",
-        zIndex:900,
-        pointerEvents:"none"
-      }
-    },
-      React.createElement("div", {
-        style:{
-          minWidth:320,
-          maxWidth:420,
-          background:"#0a0c12",
-          border:"1px solid #1e2230",
-          borderRadius:12,
-          padding:"16px 20px",
-          boxShadow:"0 20px 40px #00000055",
-          textAlign:"center"
-        }
-      },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:18, letterSpacing:2, color:"#FFD700", marginBottom:6 } },
-          "WAITING FOR PICKER"
+    React.createElement("main", { className: "auction-main", "aria-label": "Player draft" },
+      React.createElement("header", { className: "auction-header" },
+        React.createElement("div", { className: "auction-topline" },
+          React.createElement("span", { className: "auction-lot" }, `LOT ${currentLotNum} / ${lotOrder.length}`),
+          React.createElement("span", { className: "auction-muted" }, `${availablePlayers.length} available`),
+          !streamHealthy && React.createElement(StatusPill, { tone: "gold" }, "RECONNECTING"),
+          React.createElement("span", { className: "auction-personal" }, `${myParticipant?.budget ?? 0}M left · ${myParticipant?.squad.length || 0}/${SQUAD_MAX} players`),
+          React.createElement(AuctionRoomMenu, {
+            roomCode, isHost, busy: actionBusy, backupPending, abandonedCount: abandonedBy.length,
+            onCopy: async () => { try { await navigator.clipboard.writeText(roomCode); showToast("Room code copied", "#00FF88"); } catch { showToast("Copy failed", "#FF6B35"); } },
+            onBackup: handleDownloadBackup, onReadmit: () => setReadmitOpen(true), onLeave: handleAbandonClick,
+            onSkip: isHost && lotOpen && !lotClosing && /^player\s+\d+$/i.test(currentPickerName || "") ? handleHostForceSkip : null,
+            pickerName: currentPickerName,
+          })
         ),
-        React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#bbb" } },
-          `${currentPickerName} is currently picking. Your turn will unlock automatically.`
-        )
-      )
-    ),
-    React.createElement("style", null, "@keyframes biddingSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }"),
-
-    React.createElement("div", { style:{ display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0 } },
-      React.createElement("div", { style:{ padding:"10px 16px", borderBottom:"1px solid #0f1218",
-        background:"#060810", flexShrink:0 } },
-        React.createElement("div", { style:{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 } },
-          React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:12 } },
-            React.createElement("div", { style:{
-              background: lotOpen ? "#FFD70018" : "#0d0f16",
-              border:`1px solid ${lotOpen ? "#FFD70044" : "#1e2028"}`,
-              borderRadius:7, padding:"5px 14px",
-              fontFamily:"'Bebas Neue'", fontSize:20,
-              color: lotOpen ? "#FFD700" : "#444", letterSpacing:3
-            }}, `LOT ${currentLotNum}`),
-            React.createElement("div", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#555" } },
-              `${lotIdx+1}/${lotOrder.length} · ${availablePlayers.length}/${lotPlayers.length} available`),
-            roomCode && React.createElement("div", { style:{
-              background:"#0d0f16",
-              border:"1px solid #1e2028",
-              borderRadius:7,
-              padding:"5px 10px",
-              fontFamily:"'Bebas Neue'",
-              fontSize:14,
-              letterSpacing:2,
-              color:"#FFD700"
-            } }, `ROOM ${roomCode}`),
-            roomCode && React.createElement("button", {
-              onClick: async () => {
-                try {
-                  await navigator.clipboard.writeText(roomCode);
-                  showToast("Room code copied", "#00FF88");
-                } catch (_err) {
-                  showToast("Copy failed", "#FF6B35");
-                }
-              },
-              style:{ ...BTN.ghost, fontSize:11 }
-            }, "COPY CODE"),
-            React.createElement("div", { style:{ display:"flex", gap:4 } },
-              Object.entries(activeTiers).map(([k,t]) => {
-                const cnt = lotPlayers.filter(p => getTierKey(p.rating, activeTiers)===k).length;
-                return cnt ? React.createElement("span", { key:k, style:{
-                  fontFamily:"'Bebas Neue'", fontSize:11, color:t.color,
-                  background:t.bg, border:`1px solid ${t.border}`,
-                  borderRadius:4, padding:"2px 6px"
-                }}, `${cnt}× ${k}`) : null;
-              })
-            )
-          ),
-          React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
-            React.createElement("button", {
-              onClick: handleAbandonClick,
-              disabled: actionPending,
-              style:{ ...BTN.ghost, fontSize:11, color:isHost ? "#FF6B35" : "#FFD700", borderColor:isHost ? "#FF6B3544" : "#FFD70044" }
-            }, isHost ? "CANCEL GAME" : "ABANDON"),
-            isHost && abandonedBy.length > 0 && React.createElement("button", {
-              onClick: () => setReadmitOpen(true),
-              style:{ ...BTN.ghost, fontSize:11, color:"#FF6B35", borderColor:"#FF6B3544" }
-            }, `👥 ABANDONED (${abandonedBy.length})`),
-            isHost && React.createElement("button", {
-              onClick: handleDownloadBackup,
-              disabled: backupPending,
-              style:{ ...BTN.ghost, fontSize:11, color:"#4FC3F7", borderColor:"#4FC3F744", opacity: backupPending ? 0.6 : 1 }
-            }, backupPending ? "DOWNLOADING…" : "⬇ BACKUP"),
-            !lotClosing && !lotOpen && isHost && React.createElement("button", {
-              onClick:handleOpenLot,
-              disabled: actionPending,
-              style:{ ...BTN.gold, opacity: actionPending ? .65 : 1 }
-            }, actionPending ? "SYNCING…" : "🔓 OPEN LOT"),
-            !lotClosing && lotOpen && currentPickerKey && React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
-              isAtCap && React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#FF6B35", fontWeight:700 } }, "SQUAD FULL"),
-              React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:13, color:"#888" } },
-                "Picking: ", React.createElement("span", { style:{ color:PCOLORS[Math.max(sequence.indexOf(currentPickerKey), 0)], fontWeight:700 } }, currentPickerName || currentPickerKey)
-              ),
-              actionPending && React.createElement("span", { style:{
-                fontFamily:"'Rajdhani'", fontSize:11, color:"#FFD700", fontWeight:700
-              } }, `⏳ ${actionLabel || "Registering action…"}`),
-              showSelfPickLoader && React.createElement("span", { style:{ display:"inline-flex", alignItems:"center", gap:6 } },
-                React.createElement("span", { style:{
-                  width:12,
-                  height:12,
-                  borderRadius:"50%",
-                  border:"2px solid #FFD70044",
-                  borderTopColor:"#FFD700",
-                  animation:"biddingSpin .8s linear infinite"
-                } }),
-                React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#FFD700", fontWeight:700 } }, "REGISTERING PICK…")
-              ),
-              userCanAct
-                ? React.createElement("button", {
-                    onClick:handlePass,
-                    disabled: actionPending,
-                    style:{ background:"transparent", color:"#FF6B35", border:"1px solid #FF6B3533",
-                      borderRadius:7, padding:"5px 12px", fontSize:11, cursor: actionPending ? "not-allowed" : "pointer",
-                      opacity: actionPending ? .65 : 1,
-                      fontFamily:"'Bebas Neue'", letterSpacing:1 }
-                  }, actionPending ? "REGISTERING…" : "PASS / DONE FOR LOT")
-                : React.createElement(React.Fragment, null,
-                    React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:11, color:"#555", fontWeight:700 } },
-                      currentPickerName ? `WAITING · ${currentPickerName} IS PICKING` : "WAITING FOR PICKER"),
-                    isHost && currentPickerKey && /^player\s+\d+$/i.test(String(currentPickerName || "").trim()) && React.createElement("button", {
-                      onClick: handleHostForceSkip,
-                      disabled: actionPending,
-                      style:{ background:"#FF6B3518", color:"#FF6B35", border:"1px solid #FF6B3544",
-                        borderRadius:7, padding:"5px 12px", fontSize:11,
-                        cursor: actionPending ? "not-allowed" : "pointer",
-                        opacity: actionPending ? .65 : 1,
-                        fontFamily:"'Bebas Neue'", letterSpacing:1 }
-                    }, `⏭ SKIP ${currentPickerName}`)
-                  )
-            ),
-            !lotClosing && !lotOpen && !isHost && React.createElement("span", { style:{
-              fontFamily:"'Rajdhani'", fontSize:13, color:"#555", letterSpacing:1 } },
-              "⏳ Waiting for host to open lot…"
-            )
-          )
+        React.createElement("div", { className: `auction-turn${userCanAct && lotOpen && !lotClosing ? " auction-turn--self" : ""}`, role: "status", "aria-live": "polite" },
+          React.createElement("span", null, lotClosing ? "Lot complete" : !lotOpen ? "Waiting for the host to open this lot"
+            : userCanAct ? "Your turn — choose a player" : `${currentPickerName || "Another participant"} is picking. You can keep browsing.`),
+          !lotClosing && !lotOpen && isHost && React.createElement("button", { style: BTN.gold, onClick: handleOpenLot, disabled: actionBusy }, "OPEN LOT"),
+          !lotClosing && lotOpen && userCanAct && React.createElement("button", { style: BTN.ghost, onClick: handlePass, disabled: actionBusy }, "DONE FOR THIS LOT")
         ),
-        lotOpen && !lotClosing && React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" } },
-          React.createElement("input", {
-            value:search, onChange: e => setSearch(e.target.value),
-            placeholder:"Search name or position…",
-            style:{ background:"#0d0f16", border:"1px solid #1e2028", borderRadius:7,
-              padding:"6px 12px", color:"#fff", fontSize:13, fontFamily:"'Exo 2'",
-              outline:"none", width:190 }
-          }),
-          ["ALL",...Object.keys(POS_GROUPS)].map(g =>
-            React.createElement("button", { key:g, onClick: () => setGroupFilter(g), style:{
-              background: groupFilter===g ? (g==="ALL" ? "#FFD700" : POS_GROUPS[g]?.color) : "#0d0f16",
-              color: groupFilter===g ? "#000" : "#666",
-              border:`1px solid ${groupFilter===g ? (g==="ALL" ? "#FFD700" : POS_GROUPS[g]?.color) : "#1e2028"}`,
-              borderRadius:6, padding:"5px 10px", cursor:"pointer",
-              fontFamily:"'Bebas Neue'", fontSize:12, letterSpacing:1
-            }}, g==="ALL" ? "ALL" : POS_GROUPS[g].label)
-          )
+        actionFeedback,
+        lotOpen && !lotClosing && React.createElement("div", { className: "auction-filters" },
+          React.createElement("input", { type: "search", value: search, onChange: event => setSearch(event.target.value), placeholder: "Search players…", "aria-label": "Search players by name or position" }),
+          ["ALL", ...Object.keys(POS_GROUPS)].map(group => React.createElement("button", { type: "button", key: group, "aria-pressed": groupFilter === group, onClick: () => setGroupFilter(group) }, group === "ALL" ? "All" : POS_GROUPS[group].label)),
+          React.createElement("label", { className: "auction-picked-toggle" },
+            React.createElement("input", { type: "checkbox", checked: showPicked, onChange: event => setShowPicked(event.target.checked) }), "Show picked")
         )
       ),
 
@@ -1446,12 +833,12 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
           `${availablePlayers.length} player${availablePlayers.length!==1?"s":""} unclaimed`),
         isHost && React.createElement(React.Fragment, null,
           lotIdx + 1 >= lotOrder.length
-            ? React.createElement("button", { style:BTN.gold, onClick:handleNextLot }, "🏆 FINAL SQUADS")
+            ? React.createElement("button", { style:BTN.gold, onClick:handleNextLot, disabled: actionBusy }, "🏆 FINAL SQUADS")
             : canAnyoneBuyInFuture
               ? React.createElement("button", {
                   style:{ ...BTN.gold, opacity: actionPending ? .65 : 1 },
                   onClick:handleNextLot,
-                  disabled: actionPending
+                  disabled: actionBusy
                 }, actionPending ? "SYNCING…" : `OPEN LOT ${lotOrder[lotIdx+1]} →`)
               : React.createElement(React.Fragment, null,
                   React.createElement("div", { style:{ maxWidth:400, textAlign:"center", padding:"14px 20px",
@@ -1460,7 +847,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                   }, "⚠️ No player can afford anyone in the remaining lots — the game cannot continue."),
                   React.createElement("button", {
                     style:{ ...BTN.gold, background:"#2a0812", borderColor:"#FF3D71", color:"#FF3D71", opacity: actionPending ? .65 : 1 },
-                    disabled: actionPending,
+                    disabled: actionBusy,
                     onClick:handleEndGame
                   }, actionPending ? "ENDING…" : "🏁 END GAME")
                 )
@@ -1478,7 +865,7 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
       lotOpen && !lotClosing && React.createElement("div", { style:{ flex:1, overflow:"auto", padding:"12px 16px", minHeight:0 } },
         displayGroups.map(gk => {
           const pg = POS_GROUPS[gk];
-          const players = filterP(lotPlayers.filter(p => getPosGroup(p.pos)===gk));
+          const players = filterP(lotPlayers.filter(p => getPosGroup(p.pos)===gk && (showPicked || !ownedIds.has(p.id))));
           if (!players.length) return null;
           return React.createElement("div", { key:gk, style:{ marginBottom:14 } },
             React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:8, marginBottom:6 } },
@@ -1491,9 +878,9 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
               const owned = ownedIds.has(p.id);
               const owner = owned ? participants.find(x => x.squad.some(s => s.id===p.id)) : null;
               const ownerIdx = owner ? participants.findIndex(x => x.name===owner.name) : -1;
-              const cantAfford = !owned && currentParticipant && getTierData(p.rating, activeTiers).price > currentParticipant.budget;
-              const canPick = !owned && lotOpen && !lotClosing && userCanAct && !cantAfford && !isAtCap && !actionPending;
-              const wl = (wishlists[currentPickerName||""]||[]).includes(p.id);
+              const cantAfford = !owned && myParticipant && getTierData(p.rating, activeTiers).price > myParticipant.budget;
+              const canPick = !owned && lotOpen && !lotClosing && userCanAct && !cantAfford && !isAtCap && !actionBusy;
+              const wl = (wishlists[user.username] || []).includes(p.id);
               return React.createElement(PlayerRow, {
                 key:p.id, player:p,
                 onPick: canPick ? handlePick : null,
@@ -1501,7 +888,8 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
                 ownerColor: ownerIdx>=0 ? PCOLORS[ownerIdx] : "#888",
                 cantAfford: cantAfford && !owned,
                 isWishlist: wl,
-                onWishlist: id => onWishlist(currentPickerName||user.username, id),
+                onWishlist: id => onWishlist(user.username, id),
+                compact: true,
                 tiers: activeTiers,
                 animDelay: i*.02,
                 wishlists: wishlists,
@@ -1511,40 +899,58 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
             })
           );
         }),
-        filterP(lotPlayers).length===0 && React.createElement("div", {
-          style:{ textAlign:"center", padding:"40px 0", color:"#333",
-            fontFamily:"'Rajdhani'", fontSize:14 } }, "No players match your filter")
+        filterP(lotPlayers.filter(p => showPicked || !ownedIds.has(p.id))).length===0 && React.createElement("div", {
+          style:{ textAlign:"center", padding:"40px 0", color:"#9baac0",
+            fontFamily:"'Rajdhani'", fontSize:14 } }, "No available players match. Try another filter or show picked players.")
       )
     ),
 
-    React.createElement("div", { style:{ borderLeft:"1px solid #0f1218", background:"#060810",
-      display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0, width:272 } },
-      React.createElement("div", { style:{ flex:1, overflow:"auto", minHeight:0 } },
+    React.createElement(ResponsiveAuctionPanel, { open: panelOpen, onClose: () => setPanelOpen(false) },
+      React.createElement("nav", { className: "auction-panel-tabs", "aria-label": "Auction information" },
+        [["squad", "My squad"], ["teams", "Pick order"], ["activity", "Activity"]].map(([tab, label]) =>
+          React.createElement("button", { type: "button", key: tab, "aria-pressed": panelTab === tab, onClick: () => setPanelTab(tab) }, label))
+      ),
+      panelTab === "squad" && React.createElement("div", { className: "auction-panel-content" },
+        React.createElement("div", { className: "auction-muted" }, `${myParticipant?.budget ?? 0}M left · ${myParticipant?.squad.length || 0}/${SQUAD_MAX} players`),
+        React.createElement("button", { style: { ...BTN.ghost, marginTop: 10 }, onClick: () => { setPanelOpen(false); setAnalyserOpen(true); } }, "Formation & planner"),
+        myParticipant?.squad.length
+          ? React.createElement("ul", { className: "auction-squad-list" }, myParticipant.squad.map(player => React.createElement("li", { key: player.id },
+            React.createElement("strong", { style: { color: getTierData(player.rating, activeTiers).color } }, `${player.rating} · ${player.pos} `), player.name)))
+          : React.createElement("p", { className: "auction-muted" }, "Your picks will appear here."),
+        React.createElement("details", { className: "auction-mystery-section" },
+          React.createElement("summary", null, "Lot & price guide"),
+          Object.entries(activeTiers).map(([key, tier]) => React.createElement("p", { key, className: "auction-muted" },
+            `${key} · ${tier.price}M · ${lotPlayers.filter(p => getTierKey(p.rating, activeTiers) === key).length} in this lot`))
+        ),
+        mysteryEnabled && React.createElement("details", { className: "auction-mystery-section", open: mysteryAvailable || undefined },
+          React.createElement("summary", null, myMysteryUsed ? "Mystery Card · used" : `Mystery Card · ${MYSTERY_CARD_PRICE}M`),
+          React.createElement(MysteryCard, {
+            available: mysteryAvailable && !actionBusy,
+            used: myMysteryUsed,
+            revealedPlayer: myParticipant?.squad?.find(p => p.viaMystery) || null,
+            price: MYSTERY_CARD_PRICE,
+            hasPool: Boolean(myMysteryCandidate), affordable: myMysteryAffordable, squadHasRoom: myMysterySquadHasRoom,
+            onClick: () => { setPanelOpen(false); handleOpenMysteryCard(); },
+          })
+        )
+      ),
+      panelTab === "teams" && React.createElement("div", { style:{ flex:1, overflow:"auto", minHeight:0 } },
         React.createElement(BudgetSidebar, {
           participants,
-          currentTurn:currentPickerName || currentPickerKey,
+          sequence,
+          currentTurn: lotOpen && !lotClosing ? currentPickerName || currentPickerKey : null,
           passedSet:passedThisLot,
-          onAnalyse: () => setAnalyserOpen(true),
+          onAnalyse: () => { setPanelOpen(false); setAnalyserOpen(true); },
           lotIdx,
           totalLots:lotOrder.length,
           tiers: activeTiers,
+          budgetPerBidder: initSession.budgetPerBidder,
         })
       ),
-      mysteryEnabled && React.createElement("div", { style:{ borderTop:"1px solid #0f1218", padding:"10px", flexShrink:0 } },
-        React.createElement(MysteryCard, {
-          available: mysteryAvailable,
-          used: myMysteryUsed,
-          revealedPlayer: myParticipant?.squad?.find((p) => p.viaMystery) || null,
-          price: MYSTERY_CARD_PRICE,
-          hasPool: Boolean(myMysteryCandidate),
-          affordable: myMysteryAffordable,
-          squadHasRoom: myMysterySquadHasRoom,
-          onClick: handleOpenMysteryCard,
-        })
-      ),
-      React.createElement("div", { style:{ borderTop:"1px solid #0f1218", padding:"8px 10px", flexShrink:0 } },
-        React.createElement("div", { style:{ fontFamily:"'Bebas Neue'", fontSize:10, color:"#333", letterSpacing:3, marginBottom:5 } }, "RECENT"),
-        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:2, maxHeight:120, overflowY:"auto" } },
+      panelTab === "activity" && React.createElement("div", { className: "auction-panel-content", "aria-label": "Recent picks" },
+        React.createElement("div", { className: "auction-muted" }, "Recent picks"),
+        recentPicks.length === 0 && React.createElement("p", { className: "auction-muted" }, "No picks yet."),
+        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:8, marginTop:10 } },
           recentPicks.map((pl) => {
             const td = getTierData(pl.rating, activeTiers);
             return React.createElement("div", { key:`${pl.owner}-${pl.id}-${pl.pickedAt || 0}`, style:{
@@ -1552,13 +958,18 @@ export function BiddingScreen({ session: initSession, user, wishlists, onWishlis
               padding:"3px 6px", background:"#0a0c10", borderRadius:4
             }},
               React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:10, color:"#bbb", fontWeight:600,
-                maxWidth:88, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, pl.name.split(" ").pop()),
+                maxWidth:150, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, pl.name),
               React.createElement("span", { style:{ fontFamily:"'Rajdhani'", fontSize:9, color:PCOLORS[pl.ownerIdx], flex:1, textAlign:"center" } }, pl.owner),
-              React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:td.color } }, `${td.price}M`)
+              React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:td.color } }, `${getPlayerAcquisitionPrice(pl, activeTiers)}M`)
             );
           })
         )
       )
+    ),
+    React.createElement("footer", { className: "auction-mobile-bar" },
+      React.createElement("span", null, `${myParticipant?.budget ?? 0}M · ${myParticipant?.squad.length || 0}/${SQUAD_MAX}`),
+      React.createElement("button", { type: "button", onClick: () => { setPanelTab("squad"); setPanelOpen(true); } }, "Squad & room"),
+      userCanAct && lotOpen && !lotClosing && React.createElement("button", { type: "button", disabled: actionBusy, onClick: handlePass }, "Done / pass")
     )
   );
 }

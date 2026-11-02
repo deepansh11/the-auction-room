@@ -6,3 +6,5 @@ dist/
 backend/.env
 backend/data/*.json
 .DS_Store
+*-debug.log
+.firebase/

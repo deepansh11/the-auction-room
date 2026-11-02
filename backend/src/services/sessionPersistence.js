@@ -2,6 +2,10 @@ import { normalizeSessionDocument } from "./sessionState.js";
 
 export async function persistCompletedSessionResult(db, session) {
   if (!session || session.status !== "complete" || !session.id) return;
+  await db.collection("auctionResults").doc(String(session.id)).set(buildCompletedSessionResult(session), { merge: true });
+}
+
+export function buildCompletedSessionResult(session) {
   const normalizedSession = normalizeSessionDocument(session);
 
   const resultPayload = {
@@ -18,6 +22,7 @@ export async function persistCompletedSessionResult(db, session) {
     groupsEnabled: Boolean(normalizedSession.groupsEnabled),
     groupCount: Number(normalizedSession.groupCount) || 0,
     fixtureLeg: normalizedSession.fixtureLeg || "single",
+    clubSelections: normalizedSession.clubSelections || {},
     knockoutFormat: normalizedSession.knockoutFormat || "semiFinal",
     groups: normalizedSession.groups || {},
     fixtures: normalizedSession.fixtures || {},
@@ -31,5 +36,5 @@ export async function persistCompletedSessionResult(db, session) {
     status: "complete",
   };
 
-  await db.collection("auctionResults").doc(String(normalizedSession.id)).set(resultPayload, { merge: true });
+  return resultPayload;
 }

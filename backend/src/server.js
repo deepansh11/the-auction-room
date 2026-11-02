@@ -11,6 +11,9 @@ import userRoutes from "./routes/users.js";
 import resultRoutes from "./routes/results.js";
 import analyticsRoutes from "./routes/analytics.js";
 import { initRealtime } from "./services/realtime.js";
+import { requestTiming, startRuntimeMonitoring } from "./services/metrics.js";
+import { processSessionAction } from "./services/sessionActions.js";
+import { getFirebase } from "./services/firebaseService.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -20,6 +23,7 @@ function rateLimitMessage(req) {
 }
 
 app.set("trust proxy", 1);
+app.use(requestTiming);
 
 app.use(
   helmet({
@@ -40,6 +44,7 @@ app.use(
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "x-api-key", "authorization"],
     credentials: false,
+    maxAge: 600,
   })
 );
 
@@ -81,7 +86,17 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: status === 403 ? "Origin not allowed" : "Internal server error" });
 });
 
-initRealtime(httpServer, { corsOrigins: config.corsOrigins });
+const realtime = initRealtime(httpServer, {
+  corsOrigins: config.corsOrigins,
+  executeAction: args => processSessionAction({ ...args, db: getFirebase().db }),
+});
+startRuntimeMonitoring(() => ({
+  activeSockets: realtime.engine.clientsCount,
+  auctionConnections: [...realtime.sockets.adapter.rooms].filter(([name]) => name.startsWith("auction:")).map(([name, members]) => {
+    const identities = new Set([...members].map(id => realtime.sockets.sockets.get(id)?.data.user?.uid));
+    return { auctionId: name.slice(8), connections: members.size, additionalIdentityConnections: members.size - identities.size };
+  }),
+}));
 
 httpServer.listen(config.port, () => {
   console.log(`Backend running on http://localhost:${config.port}`);

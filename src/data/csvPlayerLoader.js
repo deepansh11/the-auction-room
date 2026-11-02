@@ -21,7 +21,17 @@ function toNullableNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function loadPlayersFromCsv(csvPath = DEFAULT_CSV_PATH) {
+const catalogueLoads = new Map();
+
+export function loadPlayersFromCsv(csvPath = DEFAULT_CSV_PATH) {
+  if (!catalogueLoads.has(csvPath)) {
+    const loading = fetchPlayersFromCsv(csvPath).catch(error => { catalogueLoads.delete(csvPath); throw error; });
+    catalogueLoads.set(csvPath, loading);
+  }
+  return catalogueLoads.get(csvPath);
+}
+
+async function fetchPlayersFromCsv(csvPath) {
   let res = await fetch(csvPath);
   if (!res.ok && csvPath === DEFAULT_CSV_PATH) {
     res = await fetch(FALLBACK_CSV_PATH);

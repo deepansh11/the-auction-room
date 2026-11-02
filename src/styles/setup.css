@@ -1,0 +1,47 @@
+.setup-page { box-sizing: border-box; max-width: 860px; padding: 24px 20px 40px; margin: auto; color: #e6edf7; font-family: 'Exo 2', system-ui, sans-serif; }
+.setup-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 24px; }
+.setup-header h1 { margin: 0; font: 36px 'Bebas Neue', sans-serif; letter-spacing: 1px; }
+.setup-header p, .setup-hint { font: 14px/1.6 'Rajdhani', system-ui, sans-serif; color: #a4b4cb; margin: 6px 0 12px; }
+.setup-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
+.setup-card { background: #0b111deb; border: 1px solid #29394e; border-radius: 12px; padding: 20px; margin: 0 0 14px; min-width: 0; }
+.setup-card h2 { margin: 0 0 16px; font-size: 18px; }
+.setup-field { display: grid; gap: 7px; color: #c3d0e2; font-size: 13px; font-weight: 500; min-width: 0; }
+.setup-page input:not([type=checkbox]), .setup-page select { box-sizing: border-box; width: 100%; min-width: 0; padding: 11px 12px; border: 1px solid #354960; border-radius: 7px; background: #080e18; color: #eef4fc; font-size: 16px; font-family: inherit; }
+.setup-page input[readonly] { color: #a4b4cb; border-style: dashed; }
+.setup-grid, .setup-names { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.setup-card > .setup-grid { margin-top: 16px; }
+.setup-options summary { cursor: pointer; font-size: 15px; font-weight: 600; }
+.setup-options summary > span { display: block; margin: 5px 0 0 18px; color: #9faec3; font: 13px/1.6 'Rajdhani', sans-serif; overflow-wrap: anywhere; }
+.setup-seat-reservations { border-top: 1px solid #29394e; padding-top: 12px; margin-top: 16px; }
+.setup-seat-reservations > summary { font-size: 14px; }
+.setup-option-content { margin-top: 20px; }
+.setup-check { display: flex; gap: 12px; align-items: flex-start; margin: 0 0 18px; font-size: 14px; }
+.setup-check input { flex-shrink: 0; margin-top: 3px; }
+.setup-check small { display: block; margin-top: 5px; color: #a4b4cb; font: 13px/1.6 'Rajdhani', sans-serif; }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.setup-page button { padding: 10px 14px; border: 1px solid #354960; border-radius: 7px; color: #dce8f7; background: #121d2b; cursor: pointer; font: 14px 'Rajdhani', system-ui, sans-serif; }
+.setup-page button:disabled, .setup-fields:disabled { opacity: .6; cursor: not-allowed; }
+.setup-page :is(button,input,select,summary):focus-visible { outline: 2px solid #8fe7c0; outline-offset: 3px; }
+.setup-pool { margin: 14px 0; max-height: 340px; overflow: auto; border-top: 1px solid #24364e; }
+.setup-pool-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 40px 30px; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid #1d2b3d; cursor: pointer; }
+.setup-pool-row span { overflow-wrap: anywhere; font-size: 14px; }
+.setup-pool-row small { color: #a4b4cb; }
+.setup-tier-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.setup-tier { margin: 0; padding: 14px; border: 1px solid #334860; border-radius: 8px; min-width: 0; }
+.setup-tier legend { padding: 0 6px; color: #c6d6e9; font-size: 14px; }
+.setup-page input[type=color] { height: 43px; padding: 4px; cursor: pointer; }
+.setup-room-code { display: block; margin: 10px 0; font-size: 24px; letter-spacing: 3px; color: #8fe7c0; }
+.setup-create { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 4px 0; }
+.setup-page .setup-primary { background: #8fe7c0; color: #08150f; border-color: #8fe7c0; padding: 13px 22px; font-weight: 700; font-size: 16px; white-space: nowrap; }
+.setup-error { background: #291a18; border: 1px solid #7d4a3e; color: #ffb6a1; padding: 14px 16px; border-radius: 8px; margin: 12px 0; font-size: 14px; line-height: 1.6; }
+.setup-error button { margin: 10px 0 0 10px; }
+@media (max-width: 560px) {
+  .setup-page { padding: 16px 10px 28px; }
+  .setup-card { padding: 16px; }
+  .setup-grid, .setup-names, .setup-tier-grid { grid-template-columns: minmax(0, 1fr); }
+  .setup-tier .setup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .setup-create { flex-direction: column; align-items: stretch; }
+  .setup-create .setup-primary { width: 100%; }
+  .setup-header { gap: 8px; }
+  .setup-header p { font-size: 13px; }
+}

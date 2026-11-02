@@ -1,27 +1,30 @@
 import React from "react";
 import { BUDGET, PCOLORS, SQUAD_MIN, SQUAD_MAX, TIERS, getTierData } from "../game/constants.js";
 import { TeamBadge, getParticipantAccent, StatusPill } from "../theme/footballTheme.js";
+import { getOrderedParticipants } from "../lib/pickOrder.js";
 
-export function BudgetSidebar({ participants, currentTurn, passedSet, onAnalyse, lotIdx, totalLots, tiers=TIERS }) {
+export function BudgetSidebar({ participants, sequence = [], currentTurn, passedSet, onAnalyse, lotIdx, totalLots, tiers=TIERS, budgetPerBidder=BUDGET }) {
   return React.createElement("div", {
     style:{ display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" }
   },
     React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, padding:10, borderBottom:"1px solid #0f1218", flexShrink:0 } },
-      React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:11, color:"#444", letterSpacing:3 } }, `LOT ${lotIdx+1}/${totalLots}`),
+      React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:"#b7c5d8", letterSpacing:1 } }, `LOT ${lotIdx+1}/${totalLots} · PICK ORDER`),
       React.createElement("button", { onClick:onAnalyse, style:{ background:"#FFD70014", border:"1px solid #FFD70033",
         color:"#FFD700", borderRadius:6, padding:"3px 9px", cursor:"pointer",
         fontFamily:"'Bebas Neue'", fontSize:11, letterSpacing:1 } }, "📊 ANALYSE")
     ),
-    React.createElement("div", {
-      style:{ display:"flex", flexDirection:"column", gap:8, overflow:"auto", padding:10, minHeight:0, flex:1 }
+    React.createElement("p", { style: { margin: "0 10px 6px", fontFamily: "'Rajdhani'", fontSize: 12, color: "#9baac0" } }, "Order repeats each round. Done teams are skipped."),
+    React.createElement("ol", {
+      "aria-label": `Lot ${lotIdx + 1} pick order`,
+      style:{ display:"flex", flexDirection:"column", gap:8, overflow:"auto", padding:10, margin:0, listStyle:"none", minHeight:0, flex:1 }
     },
-    participants.map((p, i) => {
-      const pct = (p.budget / BUDGET) * 100;
+    getOrderedParticipants(participants, sequence).map(({ participant: p, colorIndex: i, position }) => {
+      const pct = Math.max(0, Math.min(100, (p.budget / (budgetPerBidder || BUDGET)) * 100));
       const barCol = pct > 50 ? "#00FF88" : pct > 25 ? "#FFD700" : "#FF3D71";
-      const isPicking = currentTurn === p.name;
       const hasPassed = passedSet?.has(p.name);
+      const isPicking = currentTurn === p.name && !hasPassed;
 
-      return React.createElement("div", { key:i, style:{
+      return React.createElement("li", { key:p.name, "data-participant": p.name, "aria-current": isPicking ? "step" : undefined, style:{
         background:"#0d0f16", borderRadius:9, padding:"9px 11px",
         border:`1px solid ${isPicking ? getParticipantAccent(i)+"66" : hasPassed ? "#0f1015" : "#1a1c22"}`,
         opacity: hasPassed ? .5 : 1,
@@ -29,14 +32,16 @@ export function BudgetSidebar({ participants, currentTurn, passedSet, onAnalyse,
         transition:"all .3s",
       }},
         React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 } },
-          React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:6 } },
+          React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:6, minWidth:0 } },
+            React.createElement("span", { "aria-label": position === null ? "Pick order pending" : `Pick position ${position}`, style: {
+              fontFamily: "'Bebas Neue'", fontSize: 16, color: "#b6c4d7", minWidth: 22, flexShrink: 0,
+            } }, position === null ? "—" : `#${position}`),
             React.createElement(TeamBadge, { name: p.name, color: getParticipantAccent(i), size: 22, subtle: true }),
             React.createElement("span", { style:{ fontFamily:"'Exo 2'", fontSize:12, fontWeight:700,
-              color: isPicking ? getParticipantAccent(i) : "#ccc" } }, p.name)
+              color: isPicking ? getParticipantAccent(i) : "#ccc", overflowWrap:"anywhere" } }, p.name)
           ),
-          React.createElement("div", { style:{ display:"flex", gap:5, alignItems:"center" } },
+          React.createElement("div", { style:{ display:"flex", gap:5, alignItems:"center", flexShrink:0, marginLeft:6 } },
             hasPassed && React.createElement(StatusPill, { tone: "red" }, "DONE"),
-            isPicking && React.createElement(StatusPill, { tone: "green" }, "LIVE"),
             React.createElement("span", { style:{ fontFamily:"'Bebas Neue'", fontSize:13, color:barCol } }, `${p.budget}M`)
           )
         ),
